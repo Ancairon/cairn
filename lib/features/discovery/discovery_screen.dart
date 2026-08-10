@@ -443,6 +443,22 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
           icon: const Icon(Icons.play_arrow),
           label: const Text('Play'),
         ),
+        // Deliberately low-emphasis — a "not right now" escape, not a
+        // competing call to action next to Rate/Play. Not a dislike: no
+        // rating is recorded, and it doesn't touch the anchor or pivot.
+        Center(
+          child: TextButton(
+            onPressed: () => controller.skip(),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+              visualDensity: VisualDensity.compact,
+            ),
+            child: Text(
+              'Not for me right now',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ),
       ],
     );
   }

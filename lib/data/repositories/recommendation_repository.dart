@@ -30,6 +30,11 @@ class RecommendationRepository {
   final AlbumRepository albums;
   final RatingRepository ratings;
 
+  // Session-only escape valve: "not right now" rather than a dislike. Never
+  // persisted (no schema change) — resets on every app restart — and never
+  // touches the anchor or pivot logic below, unlike a real 1-2/4-5 rating.
+  final Set<String> _sessionSkipped = {};
+
   RecommendationRepository(
     this.database,
     this.musicBrainz,
@@ -53,6 +58,15 @@ class RecommendationRepository {
 
   /// The very first recommendation, or resuming with no rating just made.
   Future<Album> next() => _nextFromCurrentAnchorOrPivot();
+
+  /// "Skip" — not a rating. Keeps the current anchor untouched and never
+  /// pivots; just marks [mbid] excluded for the rest of this session so the
+  /// same album doesn't loop straight back, then continues from wherever
+  /// `next()` would have gone anyway.
+  Future<Album> skip(String mbid) {
+    _sessionSkipped.add(mbid);
+    return _nextFromCurrentAnchorOrPivot();
+  }
 
   /// "Start New Queue From Here" — journal action on a highly-rated album,
   /// or picking a specific album via search to jump straight into the loop.
@@ -94,7 +108,7 @@ class RecommendationRepository {
       candidates.addAll(await musicBrainz.browseReleaseGroupsByArtist(artistMbid));
     }
 
-    final excluded = _ratedMbids();
+    final excluded = _excludedMbids();
     final best = pickBestCandidate(candidates, seedGenres: seed.genres, excludeMbids: excluded);
     if (best == null) return _pivot();
 
@@ -119,7 +133,7 @@ class RecommendationRepository {
       final results = await musicBrainz.searchReleaseGroupsByTag(genre);
       if (results.isEmpty) continue;
 
-      final excluded = _ratedMbids();
+      final excluded = _excludedMbids();
       final unrated = results.map((r) => r['id'] as String).where((mbid) => !excluded.contains(mbid));
       final pick = unrated.isNotEmpty ? unrated.first : (results.first['id'] as String);
       return albums.getOrFetch(pick);
@@ -128,7 +142,10 @@ class RecommendationRepository {
     throw StateError('No results for any genre in the pivot pool: $pool');
   }
 
-  Set<String> _ratedMbids() => ratings.allRatings().map((r) => r.albumMbid).toSet();
+  // Rated albums plus this session's skips — both excluded from candidates,
+  // but only ratings are persisted; skips live only in [_sessionSkipped].
+  Set<String> _excludedMbids() =>
+      ratings.allRatings().map((r) => r.albumMbid).toSet()..addAll(_sessionSkipped);
 
   String? _currentAnchor() {
     final rows = database.db.select('SELECT current_anchor_mbid FROM app_state WHERE id = 0');

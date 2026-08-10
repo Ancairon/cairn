@@ -43,6 +43,14 @@ class DiscoveryController extends ChangeNotifier {
         return recommendations.onRated(album, stars);
       });
 
+  /// "Not right now" — deliberately not a rating: no row written to
+  /// `ratings`, no anchor change, no pivot. Just moves on to the next album.
+  Future<void> skip() => _run(() {
+        final album = currentAlbum;
+        if (album == null) return recommendations.next();
+        return recommendations.skip(album.mbid);
+      });
+
   Future<void> _run(Future<Album> Function() action) async {
     isLoading = true;
     errorMessage = null;

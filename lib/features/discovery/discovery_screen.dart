@@ -155,8 +155,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
     return AspectRatio(
       aspectRatio: 1,
       child: Container(
-        color: Colors.grey.shade300,
-        child: const Icon(Icons.album, size: 64, color: Colors.grey),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: Icon(Icons.album, size: 64, color: Theme.of(context).colorScheme.onSurfaceVariant),
       ),
     );
   }

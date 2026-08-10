@@ -46,9 +46,18 @@ class RecordReccomendApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'record_reccomend',
+      themeMode: ThemeMode.system,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.deepPurple,
+          brightness: Brightness.light,
+          dynamicSchemeVariant: DynamicSchemeVariant.expressive,
+        ),
+      ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.deepPurple,
+          brightness: Brightness.dark,
           dynamicSchemeVariant: DynamicSchemeVariant.expressive,
         ),
       ),

@@ -1,0 +1,17 @@
+name: record_reccomend
+description: >
+  Album-first music discovery — local-first, no login, no API keys.
+  Terminal app first (Milestone 1); Flutter mobile UI comes later on the same data layer.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  sqlite3: ^3.5.1
+  http: ^1.2.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.0.0

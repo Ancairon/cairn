@@ -1,0 +1,30 @@
+# SOW tracking is a local planning aid — deliberately not published in this repo
+.agents/sow/
+
+# Dart/Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+*.g.dart.bak
+
+# Android (once Milestone 3 adds platform folders)
+android/.gradle/
+android/local.properties
+android/**/gradle-wrapper.jar
+
+# iOS (once Milestone 3 adds platform folders)
+ios/Pods/
+ios/.symlinks/
+
+# Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+
+# OS
+.DS_Store

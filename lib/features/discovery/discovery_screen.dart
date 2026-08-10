@@ -1,6 +1,8 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../data/genre_pool.dart';
+import '../../data/models/album.dart';
 import 'discovery_controller.dart';
 
 class DiscoveryScreen extends StatefulWidget {
@@ -13,17 +15,20 @@ class DiscoveryScreen extends StatefulWidget {
 }
 
 // The main card (art + labels + buttons) sits on top of a hidden background
-// menu, full-screen at rest. Dragging it upward translates it off-screen at
-// the top, exposing the menu underneath at the bottom; releasing snaps it
-// to fully closed or fully open rather than resting wherever the drag ended.
+// menu, full-screen at rest. A vertical swipe past a small threshold is a
+// trigger, not a scrub — the card doesn't move with the finger at all; on
+// release it plays one fixed open/close animation to whichever end state
+// the swipe direction indicated. Tapping the card while open, or swiping
+// down on the exposed background, closes it the same way.
 class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProviderStateMixin {
   double _pendingRating = 3;
   String? _lastSeenAlbumMbid;
-  bool _genresPanelOpen = false;
+  double _dragAccum = 0;
   late AnimationController _liftController;
 
   static const _snapDuration = Duration(milliseconds: 600);
   static const _snapCurve = Curves.easeInOutCubicEmphasized;
+  static const _dragTriggerDistance = 40.0;
 
   @override
   void initState() {
@@ -38,23 +43,25 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
     super.dispose();
   }
 
-  void _onDragUpdate(DragUpdateDetails details, double liftAmount) {
-    _liftController.value -= details.delta.dy / liftAmount;
+  void _onDragStart(DragStartDetails details) {
+    _dragAccum = 0;
+  }
+
+  void _onDragUpdate(DragUpdateDetails details) {
+    _dragAccum += details.delta.dy;
   }
 
   void _onDragEnd(DragEndDetails details) {
-    final flingVelocity = details.velocity.pixelsPerSecond.dy;
-    final target = flingVelocity < -250
-        ? 1.0
-        : flingVelocity > 250
-            ? 0.0
-            : (_liftController.value > 0.5 ? 1.0 : 0.0);
-    _liftController.animateTo(target, duration: _snapDuration, curve: _snapCurve);
+    if (_dragAccum <= -_dragTriggerDistance) {
+      _liftController.animateTo(1, duration: _snapDuration, curve: _snapCurve);
+    } else if (_dragAccum >= _dragTriggerDistance) {
+      _liftController.animateTo(0, duration: _snapDuration, curve: _snapCurve);
+    }
+    // Otherwise: too small to count as a real swipe — the card never moved
+    // during the drag, so there's nothing to snap back from.
   }
 
-  // Always safe to call regardless of current state — checks internally so
-  // it can be wired up once as a static callback rather than rebuilt every
-  // animation frame with a live "is it open" condition baked in.
+  // Always safe to call regardless of current state.
   void _close() {
     if (_liftController.value > 0.01) {
       _liftController.animateTo(0, duration: _snapDuration, curve: _snapCurve);
@@ -72,33 +79,11 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
   }
 
   Widget _body(BuildContext context, DiscoveryController controller) {
-    if (controller.isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (controller.errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Something went wrong:\n${controller.errorMessage}', textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton(onPressed: controller.loadNext, child: const Text('Try again')),
-            ],
-          ),
-        ),
-      );
-    }
-
     final album = controller.currentAlbum;
-    if (album == null) {
-      return const Center(child: Text('No recommendation yet.'));
-    }
 
     // A new album arrived — reset the rating slider back to neutral rather
     // than carrying over whatever was left from the previous album.
-    if (_lastSeenAlbumMbid != album.mbid) {
+    if (album != null && _lastSeenAlbumMbid != album.mbid) {
       _lastSeenAlbumMbid = album.mbid;
       _pendingRating = 3;
     }
@@ -106,11 +91,10 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
     final colors = Theme.of(context).colorScheme;
     final screenHeight = MediaQuery.of(context).size.height;
     // The card is shorter than the screen even at rest, so a sliver of the
-    // background color is always visible at the bottom. Dragging it all the
-    // way up leaves a deliberate "lip" of the card visible at the very top
-    // instead of disappearing entirely — that lip is what "any tap brings
-    // it back" acts on, and what a downward drag on the exposed background
-    // also targets.
+    // background color is always visible at the bottom. Fully open leaves a
+    // deliberate "lip" of the card visible at the top instead of
+    // disappearing entirely — that lip is what a tap or downward swipe acts
+    // on to bring it back.
     const restPeek = 48.0;
     const topRemnant = 96.0;
     final cardHeight = screenHeight - restPeek;
@@ -118,43 +102,21 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
 
     return Stack(
       children: [
-        // Background — the menu, hidden behind the card until lifted.
-        // Anchored to the bottom, since that's the edge the card's own
-        // bottom recedes from first as it translates upward. Also
-        // drag-responsive: swiping down anywhere on the exposed background
-        // brings the card back down, same physics as dragging the card
-        // itself.
+        // Background — the menu, hidden behind the card until lifted. Its
+        // own Navigator, so tapping an entry pushes results in as a
+        // horizontal slide (and a right-swipe pops back to the menu) via
+        // Cupertino's standard page transition — no custom gesture code
+        // needed for that part.
         Positioned.fill(
           child: GestureDetector(
-            onVerticalDragUpdate: (details) => _onDragUpdate(details, liftAmount),
+            onVerticalDragStart: _onDragStart,
+            onVerticalDragUpdate: _onDragUpdate,
             onVerticalDragEnd: _onDragEnd,
             child: Container(
               color: colors.surface,
-              child: SafeArea(
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _MenuAction(
-                          icon: Icons.tune,
-                          label: 'Liked genres',
-                          expanded: _genresPanelOpen,
-                          onTap: () => setState(() => _genresPanelOpen = !_genresPanelOpen),
-                        ),
-                        AnimatedSize(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          alignment: Alignment.topCenter,
-                          child: _genresPanelOpen
-                              ? _genrePanel(context, controller)
-                              : const SizedBox(width: double.infinity),
-                        ),
-                      ],
-                    ),
-                  ),
+              child: Navigator(
+                onGenerateRoute: (settings) => CupertinoPageRoute(
+                  builder: (context) => _MenuHomePage(controller: controller),
                 ),
               ),
             ),
@@ -162,125 +124,36 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
         ),
 
         // Foreground — the card. Full height at rest (top: 0), so it covers
-        // the menu entirely until dragged. Built once and reused via
+        // the menu entirely until lifted. Built once and reused via
         // AnimatedBuilder's `child` — only the Positioned wrapper rebuilds
-        // every animation tick, not the whole card (art, chips, slider,
-        // buttons), which is what was making the drag/snap feel janky.
+        // every animation tick, not the whole card.
         AnimatedBuilder(
           animation: _liftController,
           child: GestureDetector(
-            onVerticalDragUpdate: (details) => _onDragUpdate(details, liftAmount),
+            onVerticalDragStart: _onDragStart,
+            onVerticalDragUpdate: _onDragUpdate,
             onVerticalDragEnd: _onDragEnd,
             onTap: _close,
             child: Container(
-                  decoration: BoxDecoration(
-                    color: colors.surfaceContainerHighest,
-                    borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28)),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 16)],
-                  ),
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SizedBox(
-                            width: double.infinity,
-                            height: screenHeight * 0.34,
-                            child: album.coverArtUrl != null
-                                ? ClipRRect(
-                                    borderRadius: BorderRadius.circular(16),
-                                    child: Image.network(
-                                      album.coverArtUrl!,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (context, error, stackTrace) => _artworkPlaceholder(context),
-                                    ),
-                                  )
-                                : _artworkPlaceholder(context),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            album.title,
-                            style: Theme.of(context).textTheme.headlineSmall,
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            '${album.artistName} · ${album.firstReleaseYear ?? 'unknown year'}',
-                            style: Theme.of(context).textTheme.titleMedium,
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 6),
-                          if (album.genres.isNotEmpty)
-                            SizedBox(
-                              height: 32,
-                              child: ListView(
-                                scrollDirection: Axis.horizontal,
-                                children: album.genres
-                                    .map((g) => Padding(
-                                          padding: const EdgeInsets.only(right: 6),
-                                          child: Chip(label: Text(g), visualDensity: VisualDensity.compact),
-                                        ))
-                                    .toList(),
-                              ),
-                            ),
-                          const SizedBox(height: 8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            spacing: 8,
-                            children: [
-                              FilterChip(
-                                label: const Text('CD'),
-                                avatar: const Icon(Icons.album, size: 18),
-                                selected: album.ownsCd,
-                                onSelected: (_) => controller.toggleOwnsCd(),
-                              ),
-                              FilterChip(
-                                label: const Text('Vinyl'),
-                                avatar: const Icon(Icons.album_outlined, size: 18),
-                                selected: album.ownsVinyl,
-                                onSelected: (_) => controller.toggleOwnsVinyl(),
-                              ),
-                            ],
-                          ),
-                          Text(
-                            'Rating: ${_pendingRating.round()} star${_pendingRating.round() == 1 ? '' : 's'}',
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          SliderTheme(
-                            data: SliderTheme.of(context).copyWith(
-                              trackHeight: 4,
-                              overlayShape: SliderComponentShape.noOverlay,
-                            ),
-                            child: Slider(
-                              value: _pendingRating,
-                              min: 1,
-                              max: 5,
-                              divisions: 4,
-                              label: '${_pendingRating.round()}',
-                              onChanged: (value) => setState(() => _pendingRating = value),
-                            ),
-                          ),
-                          FilledButton(
-                            onPressed: () => controller.rate(_pendingRating.round()),
-                            child: const Text('Rate'),
-                          ),
-                          const SizedBox(height: 8),
-                          FilledButton.icon(
-                            onPressed: () => _showPlayOptions(context, controller),
-                            icon: const Icon(Icons.play_arrow),
-                            label: const Text('Play'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28)),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 16)],
+              ),
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                  child: controller.isLoading
+                      ? _LoadingContent(color: colors.onSurfaceVariant)
+                      : controller.errorMessage != null
+                          ? _errorContent(controller)
+                          : album == null
+                              ? const Center(child: Text('No recommendation yet.'))
+                              : _albumContent(context, controller, album),
                 ),
               ),
+            ),
+          ),
           builder: (context, child) {
             return Positioned(
               top: -(_liftController.value * liftAmount),
@@ -295,52 +168,124 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
     );
   }
 
+  Widget _errorContent(DiscoveryController controller) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Something went wrong:\n${controller.errorMessage}', textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          FilledButton(onPressed: controller.loadNext, child: const Text('Try again')),
+        ],
+      ),
+    );
+  }
+
+  Widget _albumContent(BuildContext context, DiscoveryController controller, Album album) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // A fixed rectangle regardless of the source image's own
+        // proportions — the artwork is always cropped to fit it.
+        ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: AspectRatio(
+            aspectRatio: 16 / 10,
+            child: album.coverArtUrl != null
+                ? Image.network(
+                    album.coverArtUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => _artworkPlaceholder(context),
+                  )
+                : _artworkPlaceholder(context),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          album.title,
+          style: Theme.of(context).textTheme.headlineSmall,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        Text(
+          '${album.artistName} · ${album.firstReleaseYear ?? 'unknown year'}',
+          style: Theme.of(context).textTheme.titleMedium,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 6),
+        if (album.genres.isNotEmpty)
+          SizedBox(
+            height: 32,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: album.genres
+                  .map<Widget>((g) => Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Chip(label: Text(g), visualDensity: VisualDensity.compact),
+                      ))
+                  .toList(),
+            ),
+          ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          spacing: 8,
+          children: [
+            FilterChip(
+              label: const Text('CD'),
+              avatar: const Icon(Icons.album, size: 18),
+              selected: album.ownsCd,
+              onSelected: (_) => controller.toggleOwnsCd(),
+            ),
+            FilterChip(
+              label: const Text('Vinyl'),
+              avatar: const Icon(Icons.album_outlined, size: 18),
+              selected: album.ownsVinyl,
+              onSelected: (_) => controller.toggleOwnsVinyl(),
+            ),
+          ],
+        ),
+        Text(
+          'Rating: ${_pendingRating.round()} star${_pendingRating.round() == 1 ? '' : 's'}',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 4,
+            overlayShape: SliderComponentShape.noOverlay,
+          ),
+          child: Slider(
+            value: _pendingRating,
+            min: 1,
+            max: 5,
+            divisions: 4,
+            label: '${_pendingRating.round()}',
+            onChanged: (value) => setState(() => _pendingRating = value),
+          ),
+        ),
+        FilledButton(
+          onPressed: () => controller.rate(_pendingRating.round()),
+          child: const Text('Rate'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: () => _showPlayOptions(context, controller),
+          icon: const Icon(Icons.play_arrow),
+          label: const Text('Play'),
+        ),
+      ],
+    );
+  }
+
   Widget _artworkPlaceholder(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return Container(
       color: colors.surfaceContainerHigh,
       child: Icon(Icons.album, size: 64, color: colors.onSurfaceVariant),
-    );
-  }
-
-  Widget _genrePanel(BuildContext context, DiscoveryController controller) {
-    final selected = controller.likedGenres().toSet();
-
-    return StatefulBuilder(
-      builder: (context, setPanelState) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Used to seed recommendations when there\'s nothing to branch from yet.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: genrePool.map((genre) {
-                return FilterChip(
-                  label: Text(genre),
-                  selected: selected.contains(genre),
-                  onSelected: (isSelected) => setPanelState(() {
-                    isSelected ? selected.add(genre) : selected.remove(genre);
-                  }),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () {
-                controller.setLikedGenres(selected.toList());
-                setState(() => _genresPanelOpen = false);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -370,20 +315,107 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
   }
 }
 
-/// A row in the background menu layer — an icon, a label, and a
-/// chevron that flips to show expanded/collapsed state.
+/// The background menu's home page — just the entry list, anchored to the
+/// bottom (the edge revealed first as the card lifts).
+class _MenuHomePage extends StatelessWidget {
+  final DiscoveryController controller;
+
+  const _MenuHomePage({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: _MenuAction(
+            icon: Icons.tune,
+            label: 'Liked genres',
+            onTap: () => Navigator.of(context).push(
+              CupertinoPageRoute(builder: (context) => _GenrePickerPage(controller: controller)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Pushed on top of the menu home page — slides in horizontally, and a
+/// right-swipe (Cupertino's standard back gesture) pops back to the menu.
+class _GenrePickerPage extends StatefulWidget {
+  final DiscoveryController controller;
+
+  const _GenrePickerPage({required this.controller});
+
+  @override
+  State<_GenrePickerPage> createState() => _GenrePickerPageState();
+}
+
+class _GenrePickerPageState extends State<_GenrePickerPage> {
+  late final Set<String> _selected = widget.controller.likedGenres().toSet();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 8, 16, 0),
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                Text('Liked genres', style: Theme.of(context).textTheme.titleLarge),
+              ],
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: genrePool.map((genre) {
+                  return FilterChip(
+                    label: Text(genre),
+                    selected: _selected.contains(genre),
+                    onSelected: (isSelected) => setState(() {
+                      isSelected ? _selected.add(genre) : _selected.remove(genre);
+                    }),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: FilledButton(
+              onPressed: () {
+                widget.controller.setLikedGenres(_selected.toList());
+                Navigator.of(context).pop();
+              },
+              child: const Text('Save'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A row in the background menu — icon, label, and a static chevron
+/// indicating it navigates to another screen.
 class _MenuAction extends StatelessWidget {
   final IconData icon;
   final String label;
-  final bool expanded;
   final VoidCallback onTap;
 
-  const _MenuAction({
-    required this.icon,
-    required this.label,
-    required this.expanded,
-    required this.onTap,
-  });
+  const _MenuAction({required this.icon, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -397,13 +429,60 @@ class _MenuAction extends StatelessWidget {
             const SizedBox(width: 12),
             Text(label, style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(width: 12),
-            AnimatedRotation(
-              turns: expanded ? 0.5 : 0,
-              duration: const Duration(milliseconds: 200),
-              child: const Icon(Icons.expand_more),
-            ),
+            const Icon(Icons.chevron_right),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// A simple three-dot staggered bounce, shown in place of the album content
+/// while a recommendation is loading — the card itself never disappears.
+class _LoadingContent extends StatefulWidget {
+  final Color color;
+
+  const _LoadingContent({required this.color});
+
+  @override
+  State<_LoadingContent> createState() => _LoadingContentState();
+}
+
+class _LoadingContentState extends State<_LoadingContent> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (i) {
+          return AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              final t = (_controller.value - (i * 0.2)) % 1.0;
+              final bounce = t < 0.5 ? Curves.easeOut.transform(t * 2) : Curves.easeIn.transform(1 - (t - 0.5) * 2);
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Transform.translate(
+                  offset: Offset(0, -bounce * 8),
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
+                  ),
+                ),
+              );
+            },
+          );
+        }),
       ),
     );
   }

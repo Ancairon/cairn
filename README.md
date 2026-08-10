@@ -12,9 +12,11 @@ No API keys, no login, no backend — every data source it talks to (MusicBrainz
 
 ```sh
 dart pub get
-dart run bin/cli.dart next                    # get a recommended album
-dart run bin/cli.dart rate <album-mbid> 1-5    # rate it; prints the next recommendation
-dart run bin/cli.dart journal                  # list everything you've rated
+dart run bin/cli.dart onboard                  # pick genres you like (run this first)
+dart run bin/cli.dart next                     # get a recommended album
+dart run bin/cli.dart rate <album-mbid> 1-5     # rate it; prints the next recommendation
+dart run bin/cli.dart search <query>            # find a specific album and start the loop from it
+dart run bin/cli.dart journal                   # list everything you've rated
 dart run bin/cli.dart export-json               # export your journal as JSON
 dart run bin/cli.dart export-csv                # export your journal as CSV
 ```

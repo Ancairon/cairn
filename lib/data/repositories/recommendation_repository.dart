@@ -6,19 +6,19 @@ import '../remote/listenbrainz_client.dart';
 import 'album_repository.dart';
 import 'rating_repository.dart';
 
-// Fresh, not-yet-tried decade/genre buckets to pivot into when there's no
-// anchor yet, or the last rating was a dislike. Deliberately small and
-// hand-picked rather than derived from a genre taxonomy — good enough to
-// escape a bad run; retune once real usage shows it's too narrow.
-const pivotBuckets = [
-  {'genre': 'jazz', 'decade': 1960},
-  {'genre': 'ambient', 'decade': 1990},
-  {'genre': 'hip hop', 'decade': 1990},
-  {'genre': 'post-punk', 'decade': 1980},
-  {'genre': 'shoegaze', 'decade': 1990},
-  {'genre': 'folk', 'decade': 1970},
-  {'genre': 'techno', 'decade': 2000},
-  {'genre': 'soul', 'decade': 1970},
+// Fallback pivot genres, used only until the user has picked liked genres
+// via onboarding — once lib/data/genre_pool.dart selections are saved, those
+// take over entirely. Deliberately small; good enough to escape a bad run
+// before onboarding exists.
+const _fallbackPivotGenres = [
+  'jazz',
+  'ambient',
+  'hip hop',
+  'post-punk',
+  'shoegaze',
+  'folk',
+  'techno',
+  'soul',
 ];
 
 /// One global "anchor" album drives every recommendation — no branch trees,
@@ -54,10 +54,28 @@ class RecommendationRepository {
   /// The very first recommendation, or resuming with no rating just made.
   Future<Album> next() => _nextFromCurrentAnchorOrPivot();
 
-  /// "Start New Queue From Here" — journal action on a highly-rated album.
+  /// "Start New Queue From Here" — journal action on a highly-rated album,
+  /// or picking a specific album via search to jump straight into the loop.
   Future<Album> restartFrom(Album album) async {
     _setAnchor(album.mbid);
     return _nextFromSeed(album);
+  }
+
+  List<String> likedGenres() {
+    final rows = database.db.select('SELECT liked_genres FROM app_state WHERE id = 0');
+    if (rows.isEmpty || rows.first['liked_genres'] == null) return [];
+    return (jsonDecode(rows.first['liked_genres'] as String) as List).cast<String>();
+  }
+
+  /// Onboarding action — replaces the cold-start/pivot genre pool with the
+  /// user's own picks. Does not affect anchor-based branching (see
+  /// specs/architecture.md: genres influence cold-start/pivots only).
+  void setLikedGenres(List<String> genres) {
+    database.db.execute(
+      'INSERT INTO app_state (id, liked_genres) VALUES (0, ?) '
+      'ON CONFLICT(id) DO UPDATE SET liked_genres = excluded.liked_genres',
+      [jsonEncode(genres)],
+    );
   }
 
   Future<Album> _nextFromCurrentAnchorOrPivot() async {
@@ -84,24 +102,33 @@ class RecommendationRepository {
   }
 
   Future<Album> _pivot() async {
-    final tried = _recentPivotBuckets();
-    final bucket = pivotBuckets.firstWhere(
-      (b) => !tried.contains(_bucketKey(b)),
-      orElse: () => pivotBuckets[tried.length % pivotBuckets.length],
-    );
-    _recordPivotBucket(_bucketKey(bucket));
+    final pool = likedGenres().isNotEmpty ? likedGenres() : _fallbackPivotGenres;
 
-    final query = await musicBrainz.searchReleaseGroup('', bucket['genre'] as String);
-    final results = ((query['release-groups'] as List?) ?? []).cast<Map<String, dynamic>>();
-    final excluded = _ratedMbids();
-    final unrated = results.map((r) => r['id'] as String).where((mbid) => !excluded.contains(mbid));
-    final pick = unrated.isNotEmpty ? unrated.first : (results.first['id'] as String);
-    return albums.getOrFetch(pick);
+    // Bounded by pool.length: if every genre in the pool comes back with
+    // nothing tagged (unlikely, but possible for an unusual hand-typed
+    // onboarding pick), give up on pivoting and fall through rather than
+    // recursing forever.
+    for (var attempt = 0; attempt < pool.length; attempt++) {
+      final tried = _recentPivotBuckets();
+      final genre = pool.firstWhere(
+        (g) => !tried.contains(g),
+        orElse: () => pool[tried.length % pool.length],
+      );
+      _recordPivotBucket(genre);
+
+      final results = await musicBrainz.searchReleaseGroupsByTag(genre);
+      if (results.isEmpty) continue;
+
+      final excluded = _ratedMbids();
+      final unrated = results.map((r) => r['id'] as String).where((mbid) => !excluded.contains(mbid));
+      final pick = unrated.isNotEmpty ? unrated.first : (results.first['id'] as String);
+      return albums.getOrFetch(pick);
+    }
+
+    throw StateError('No results for any genre in the pivot pool: $pool');
   }
 
   Set<String> _ratedMbids() => ratings.allRatings().map((r) => r.albumMbid).toSet();
-
-  String _bucketKey(Map<String, dynamic> bucket) => '${bucket['genre']}-${bucket['decade']}';
 
   String? _currentAnchor() {
     final rows = database.db.select('SELECT current_anchor_mbid FROM app_state WHERE id = 0');

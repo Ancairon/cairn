@@ -13,19 +13,37 @@ class MusicBrainzClient {
 
   MusicBrainzClient(this.http, this.cache);
 
-  Future<Map<String, dynamic>> searchReleaseGroup(String artist, String title) async {
-    final key = 'mb:search-release-group:$artist:$title';
+  /// Release-groups community-tagged with [genre] — used to seed cold-start
+  /// and pivot recommendations from a genre rather than a specific artist.
+  Future<List<Map<String, dynamic>>> searchReleaseGroupsByTag(String genre, {int limit = 25}) async {
+    final key = 'mb:search-tag:$genre';
     final cached = cache.get(key);
-    if (cached != null) return cached;
+    if (cached != null) return (cached['release-groups'] as List).cast<Map<String, dynamic>>();
 
     await _rateLimiter.wait();
-    final query = artist.isEmpty ? 'release:"$title"' : 'artist:"$artist" AND release:"$title"';
     final url = Uri.parse('$_baseUrl/release-group').replace(
-      queryParameters: {'query': query, 'fmt': 'json'},
+      queryParameters: {'query': 'tag:"$genre"', 'fmt': 'json', 'limit': '$limit'},
     );
     final result = await http.getJson(url);
     cache.put(key, result, ttlSeconds: 60 * 60 * 24 * 30);
-    return result;
+    return (result['release-groups'] as List).cast<Map<String, dynamic>>();
+  }
+
+  /// Free-text release-group search — the user's own words (artist, title,
+  /// or both together), not a structured query. Used by the CLI's `search`
+  /// command to let the user jump straight to a known album.
+  Future<List<Map<String, dynamic>>> searchReleaseGroupsByText(String text, {int limit = 10}) async {
+    final key = 'mb:search-text:$text';
+    final cached = cache.get(key);
+    if (cached != null) return (cached['release-groups'] as List).cast<Map<String, dynamic>>();
+
+    await _rateLimiter.wait();
+    final url = Uri.parse('$_baseUrl/release-group').replace(
+      queryParameters: {'query': text, 'fmt': 'json', 'limit': '$limit'},
+    );
+    final result = await http.getJson(url);
+    cache.put(key, result, ttlSeconds: 60 * 60 * 24 * 30);
+    return (result['release-groups'] as List).cast<Map<String, dynamic>>();
   }
 
   Future<Map<String, dynamic>> lookupReleaseGroup(String mbid) async {

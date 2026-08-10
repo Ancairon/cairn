@@ -44,7 +44,8 @@ const _schema = [
   CREATE TABLE IF NOT EXISTS app_state (
     id INTEGER PRIMARY KEY CHECK (id = 0),
     current_anchor_mbid TEXT,
-    recent_pivot_buckets TEXT
+    recent_pivot_buckets TEXT,
+    liked_genres TEXT
   )
   ''',
   '''

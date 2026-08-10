@@ -22,7 +22,8 @@ class DiscoveryScreen extends StatefulWidget {
 // release it plays one fixed open/close animation to whichever end state
 // the swipe direction indicated. Tapping the card while open, or swiping
 // down on the exposed background, closes it the same way.
-class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderStateMixin {
+class _DiscoveryScreenState extends State<DiscoveryScreen>
+    with TickerProviderStateMixin {
   double _pendingRating = 3;
   String? _lastSeenAlbumMbid;
   double _dragAccum = 0;
@@ -43,7 +44,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
     super.initState();
     widget.controller.loadNext();
     _liftController = AnimationController(vsync: this, duration: _snapDuration);
-    _searchController = AnimationController(vsync: this, duration: _searchFadeDuration);
+    _searchController =
+        AnimationController(vsync: this, duration: _searchFadeDuration);
   }
 
   @override
@@ -54,17 +56,23 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
     super.dispose();
   }
 
-  void _onDragStart(DragStartDetails details) {
+  // Listener (not GestureDetector) so this tracks raw pointer movement
+  // regardless of what any descendant Scrollable/GestureDetector does with
+  // the same pointer — a vertical drag that starts over an inner scrollable
+  // (e.g. RatedAlbumsPage's list, the genre picker's Wrap) still gets
+  // tracked here in parallel instead of losing the gesture-arena fight to
+  // the scroll, which is what a GestureDetector would do.
+  void _onDragStart(PointerDownEvent event) {
     _dragAccum = 0;
   }
 
-  void _onDragUpdate(DragUpdateDetails details) {
-    _dragAccum += details.delta.dy;
+  void _onDragUpdate(PointerMoveEvent event) {
+    _dragAccum += event.delta.dy;
   }
 
   // Background: swipe up has nothing further to open, so only the
   // downward/close direction actually does anything here.
-  void _onDragEnd(DragEndDetails details) {
+  void _onDragEnd(PointerUpEvent event) {
     if (_dragAccum <= -_dragTriggerDistance) {
       _liftController.animateTo(1, duration: _snapDuration, curve: _snapCurve);
     } else if (_dragAccum >= _dragTriggerDistance) {
@@ -77,7 +85,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
   // Card: swiping down means something different depending on state —
   // closed already means there's nowhere further down to go, so that's
   // repurposed to open search instead.
-  void _onCardDragEnd(DragEndDetails details) {
+  void _onCardDragEnd(PointerUpEvent event) {
     final isOpen = _liftController.value > 0.5;
     if (_dragAccum <= -_dragTriggerDistance && !isOpen) {
       _liftController.animateTo(1, duration: _snapDuration, curve: _snapCurve);
@@ -99,11 +107,14 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
 
   void _openSearch() {
     setState(() => _searchOpen = true);
-    _searchController.animateTo(1, duration: _searchFadeDuration, curve: Curves.easeOutCubic);
+    _searchController.animateTo(1,
+        duration: _searchFadeDuration, curve: Curves.easeOutCubic);
   }
 
   void _closeSearch() {
-    _searchController.animateTo(0, duration: _searchFadeDuration, curve: Curves.easeOutCubic).whenComplete(() {
+    _searchController
+        .animateTo(0, duration: _searchFadeDuration, curve: Curves.easeOutCubic)
+        .whenComplete(() {
       if (!mounted) return;
       setState(() {
         _searchOpen = false;
@@ -124,7 +135,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
     });
   }
 
-  Future<void> _pickSearchResult(DiscoveryController controller, String mbid) async {
+  Future<void> _pickSearchResult(
+      DiscoveryController controller, String mbid) async {
     _closeSearch();
     await controller.startFromSearchResult(mbid);
   }
@@ -165,14 +177,15 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
       children: [
         // Background — the menu, hidden behind the card until lifted. Its
         // own Navigator, so tapping an entry pushes results in as a
-        // horizontal slide (and a right-swipe pops back to the menu) via
-        // Cupertino's standard page transition — no custom gesture code
-        // needed for that part.
+        // horizontal slide via Cupertino's page transition; popping back is
+        // handled by `_SwipeBackPop` wrapping each pushed page (Cupertino's
+        // own edge-swipe-back gesture is too narrow to rely on — see that
+        // class's doc comment).
         Positioned.fill(
-          child: GestureDetector(
-            onVerticalDragStart: _onDragStart,
-            onVerticalDragUpdate: _onDragUpdate,
-            onVerticalDragEnd: _onDragEnd,
+          child: Listener(
+            onPointerDown: _onDragStart,
+            onPointerMove: _onDragUpdate,
+            onPointerUp: _onDragEnd,
             child: Container(
               color: colors.surface,
               child: Navigator(
@@ -190,51 +203,63 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
         // every animation tick, not the whole card.
         AnimatedBuilder(
           animation: _liftController,
-          child: GestureDetector(
-            onVerticalDragStart: _onDragStart,
-            onVerticalDragUpdate: _onDragUpdate,
-            onVerticalDragEnd: _onCardDragEnd,
-            onTap: _close,
-            child: Container(
-              decoration: BoxDecoration(
-                color: colors.surfaceContainerHighest,
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28)),
-                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 16)],
-              ),
-              child: SafeArea(
-                child: AnimatedBuilder(
-                  animation: _searchController,
-                  builder: (context, _) {
-                    final t = _searchController.value;
-                    return Stack(
-                      children: [
-                        Opacity(
-                          opacity: 1 - t,
-                          child: IgnorePointer(
-                            ignoring: t > 0.01,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                              child: controller.isLoading
-                                  ? _LoadingContent(color: colors.onSurfaceVariant)
-                                  : controller.errorMessage != null
-                                      ? _errorContent(controller)
-                                      : album == null
-                                          ? const Center(child: Text('No recommendation yet.'))
-                                          : _albumContent(context, controller, album),
-                            ),
-                          ),
-                        ),
-                        if (_searchOpen || t > 0.01)
+          child: Listener(
+            onPointerDown: _onDragStart,
+            onPointerMove: _onDragUpdate,
+            onPointerUp: _onCardDragEnd,
+            child: GestureDetector(
+              onTap: _close,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius:
+                      const BorderRadius.vertical(bottom: Radius.circular(28)),
+                  boxShadow: [
+                    BoxShadow(
+                        color: colors.shadow.withValues(alpha: 0.25),
+                        blurRadius: 16)
+                  ],
+                ),
+                child: SafeArea(
+                  child: AnimatedBuilder(
+                    animation: _searchController,
+                    builder: (context, _) {
+                      final t = _searchController.value;
+                      return Stack(
+                        children: [
                           Opacity(
-                            opacity: t,
+                            opacity: 1 - t,
                             child: IgnorePointer(
-                              ignoring: t < 0.99,
-                              child: _searchOverlay(context, controller),
+                              ignoring: t > 0.01,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                                child: controller.isLoading
+                                    ? _LoadingContent(
+                                        color: colors.onSurfaceVariant)
+                                    : controller.errorMessage != null
+                                        ? _errorContent(controller)
+                                        : album == null
+                                            ? const Center(
+                                                child: Text(
+                                                    'No recommendation yet.'))
+                                            : _albumContent(
+                                                context, controller, album),
+                              ),
                             ),
                           ),
-                      ],
-                    );
-                  },
+                          if (_searchOpen || t > 0.01)
+                            Opacity(
+                              opacity: t,
+                              child: IgnorePointer(
+                                ignoring: t < 0.99,
+                                child: _searchOverlay(context, controller),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -258,9 +283,11 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('Something went wrong:\n${controller.errorMessage}', textAlign: TextAlign.center),
+          Text('Something went wrong:\n${controller.errorMessage}',
+              textAlign: TextAlign.center),
           const SizedBox(height: 16),
-          FilledButton(onPressed: controller.loadNext, child: const Text('Try again')),
+          FilledButton(
+              onPressed: controller.loadNext, child: const Text('Try again')),
         ],
       ),
     );
@@ -277,29 +304,36 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
               Expanded(
                 child: TextField(
                   controller: _searchFieldController,
-                  decoration: const InputDecoration(hintText: 'Search albums…', border: InputBorder.none),
+                  decoration: const InputDecoration(
+                      hintText: 'Search albums…', border: InputBorder.none),
                   textInputAction: TextInputAction.search,
                   onSubmitted: (query) => _runSearch(controller, query),
                 ),
               ),
-              IconButton(icon: const Icon(Icons.close), onPressed: _closeSearch),
+              IconButton(
+                  icon: const Icon(Icons.close), onPressed: _closeSearch),
             ],
           ),
           const Divider(height: 1),
           Expanded(
             child: _searching
-                ? _LoadingContent(color: Theme.of(context).colorScheme.onSurfaceVariant)
+                ? _LoadingContent(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)
                 : ListView(
                     children: _searchResults.map((r) {
                       final artist = ((r['artist-credit'] as List?) ?? [])
                           .cast<Map<String, dynamic>>()
                           .map((c) => c['name'] as String)
                           .join(', ');
-                      final year = (r['first-release-date'] as String?)?.split('-').first ?? 'unknown year';
+                      final year = (r['first-release-date'] as String?)
+                              ?.split('-')
+                              .first ??
+                          'unknown year';
                       return ListTile(
                         title: Text(r['title'] as String),
                         subtitle: Text('$artist · $year'),
-                        onTap: () => _pickSearchResult(controller, r['id'] as String),
+                        onTap: () =>
+                            _pickSearchResult(controller, r['id'] as String),
                       );
                     }).toList(),
                   ),
@@ -309,7 +343,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
     );
   }
 
-  Widget _albumContent(BuildContext context, DiscoveryController controller, Album album) {
+  Widget _albumContent(
+      BuildContext context, DiscoveryController controller, Album album) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -323,7 +358,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
                 ? Image.network(
                     album.coverArtUrl!,
                     fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => _artworkPlaceholder(context),
+                    errorBuilder: (context, error, stackTrace) =>
+                        _artworkPlaceholder(context),
                   )
                 : _artworkPlaceholder(context),
           ),
@@ -352,7 +388,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
               children: album.genres
                   .map<Widget>((g) => Padding(
                         padding: const EdgeInsets.only(right: 6),
-                        child: Chip(label: Text(g), visualDensity: VisualDensity.compact),
+                        child: Chip(
+                            label: Text(g),
+                            visualDensity: VisualDensity.compact),
                       ))
                   .toList(),
             ),
@@ -420,7 +458,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
   void _showPlayOptions(BuildContext context, DiscoveryController controller) {
     final links = controller.playLinks;
     final entries = links.isEmpty
-        ? {'Search (no direct link found)': controller.fallbackSearchUrl()}.entries
+        ? {'Search (no direct link found)': controller.fallbackSearchUrl()}
+            .entries
         : links.entries;
 
     showModalBottomSheet(
@@ -433,7 +472,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderSt
                     title: Text(entry.key),
                     onTap: () {
                       Navigator.pop(context);
-                      launchUrl(Uri.parse(entry.value), mode: LaunchMode.externalApplication);
+                      launchUrl(Uri.parse(entry.value),
+                          mode: LaunchMode.externalApplication);
                     },
                   ))
               .toList(),
@@ -464,7 +504,10 @@ class _MenuHomePage extends StatelessWidget {
                 icon: Icons.tune,
                 label: 'Liked genres',
                 onTap: () => Navigator.of(context).push(
-                  CupertinoPageRoute(builder: (context) => _GenrePickerPage(controller: controller)),
+                  CupertinoPageRoute(
+                    builder: (context) => _SwipeBackPop(
+                        child: _GenrePickerPage(controller: controller)),
+                  ),
                 ),
               ),
               _MenuAction(
@@ -472,9 +515,12 @@ class _MenuHomePage extends StatelessWidget {
                 label: 'Rated albums',
                 onTap: () => Navigator.of(context).push(
                   CupertinoPageRoute(
-                    builder: (context) => RatedAlbumsPage(
-                      ratingRepository: controller.ratings,
-                      savedFilterRepository: controller.savedFilters,
+                    builder: (context) => _SwipeBackPop(
+                      child: RatedAlbumsPage(
+                        ratingRepository: controller.ratings,
+                        albumRepository: controller.albums,
+                        savedFilterRepository: controller.savedFilters,
+                      ),
                     ),
                   ),
                 ),
@@ -483,7 +529,10 @@ class _MenuHomePage extends StatelessWidget {
                 icon: Icons.settings,
                 label: 'Settings',
                 onTap: () => Navigator.of(context).push(
-                  CupertinoPageRoute(builder: (context) => SettingsPage(settings: controller.settings)),
+                  CupertinoPageRoute(
+                    builder: (context) => _SwipeBackPop(
+                        child: SettingsPage(settings: controller.settings)),
+                  ),
                 ),
               ),
             ],
@@ -494,8 +543,45 @@ class _MenuHomePage extends StatelessWidget {
   }
 }
 
-/// Pushed on top of the menu home page — slides in horizontally, and a
-/// right-swipe (Cupertino's standard back gesture) pops back to the menu.
+/// Wraps a pushed sub-page with a full-screen swipe-right-to-pop gesture.
+/// Cupertino's own back gesture only answers to drags starting within the
+/// leftmost 20 logical pixels — too narrow to feel reliable, and the user
+/// wants this to work from anywhere on the page. A `Listener` (not
+/// `GestureDetector`) tracks raw pointer movement regardless of what any
+/// descendant Scrollable does with the same pointer — e.g. RatedAlbumsPage's
+/// horizontally-scrolling filter-chip row keeps scrolling normally, this
+/// still tracks the horizontal drag in parallel instead of losing the
+/// gesture-arena fight to it.
+class _SwipeBackPop extends StatefulWidget {
+  final Widget child;
+
+  const _SwipeBackPop({required this.child});
+
+  @override
+  State<_SwipeBackPop> createState() => _SwipeBackPopState();
+}
+
+class _SwipeBackPopState extends State<_SwipeBackPop> {
+  double _dragAccum = 0;
+
+  static const _triggerDistance = 60.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: (_) => _dragAccum = 0,
+      onPointerMove: (event) => _dragAccum += event.delta.dx,
+      onPointerUp: (_) {
+        if (_dragAccum > _triggerDistance) Navigator.of(context).maybePop();
+      },
+      child: widget.child,
+    );
+  }
+}
+
+/// Pushed on top of the menu home page — slides in horizontally, and
+/// swiping right anywhere on the page (via `_SwipeBackPop`, wrapped at the
+/// push call site in `_MenuHomePage`) pops back to the menu.
 class _GenrePickerPage extends StatefulWidget {
   final DiscoveryController controller;
 
@@ -530,7 +616,8 @@ class _GenrePickerPageState extends State<_GenrePickerPage> {
                   icon: const Icon(Icons.arrow_back),
                   onPressed: () => Navigator.of(context).pop(),
                 ),
-                Text('Liked genres', style: Theme.of(context).textTheme.titleLarge),
+                Text('Liked genres',
+                    style: Theme.of(context).textTheme.titleLarge),
               ],
             ),
           ),
@@ -563,7 +650,8 @@ class _MenuAction extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _MenuAction({required this.icon, required this.label, required this.onTap});
+  const _MenuAction(
+      {required this.icon, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -596,9 +684,11 @@ class _LoadingContent extends StatefulWidget {
   State<_LoadingContent> createState() => _LoadingContentState();
 }
 
-class _LoadingContentState extends State<_LoadingContent> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat();
+class _LoadingContentState extends State<_LoadingContent>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 900))
+    ..repeat();
 
   @override
   void dispose() {
@@ -616,7 +706,9 @@ class _LoadingContentState extends State<_LoadingContent> with SingleTickerProvi
             animation: _controller,
             builder: (context, _) {
               final t = (_controller.value - (i * 0.2)) % 1.0;
-              final bounce = t < 0.5 ? Curves.easeOut.transform(t * 2) : Curves.easeIn.transform(1 - (t - 0.5) * 2);
+              final bounce = t < 0.5
+                  ? Curves.easeOut.transform(t * 2)
+                  : Curves.easeIn.transform(1 - (t - 0.5) * 2);
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: Transform.translate(
@@ -624,7 +716,8 @@ class _LoadingContentState extends State<_LoadingContent> with SingleTickerProvi
                   child: Container(
                     width: 10,
                     height: 10,
-                    decoration: BoxDecoration(color: widget.color, shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                        color: widget.color, shape: BoxShape.circle),
                   ),
                 ),
               );

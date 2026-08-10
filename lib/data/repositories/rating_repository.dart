@@ -18,6 +18,12 @@ class RatingRepository {
     );
   }
 
+  /// Deletes the current rating for an album, if any. Used by the Rated
+  /// Albums screen's swipe-to-remove action.
+  void deleteRating(String albumMbid) {
+    database.db.execute('DELETE FROM ratings WHERE album_mbid = ?', [albumMbid]);
+  }
+
   List<Rating> allRatings() {
     final rows = database.db.select('SELECT * FROM ratings ORDER BY rated_at DESC');
     return rows

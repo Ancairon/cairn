@@ -34,6 +34,11 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   List<Map<String, dynamic>> _searchResults = [];
   final _searchFieldController = TextEditingController();
 
+  // Lets the lift-open handler push directly onto the menu's nested
+  // Navigator from outside `_MenuHomePage`, to auto-open the configured
+  // default item once the menu is fully revealed.
+  final _menuNavigatorKey = GlobalKey<NavigatorState>();
+
   static const _snapDuration = Duration(milliseconds: 600);
   static const _snapCurve = Curves.easeInOutCubicEmphasized;
   static const _dragTriggerDistance = 40.0;
@@ -43,17 +48,54 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   void initState() {
     super.initState();
     widget.controller.loadNext();
-    _liftController = AnimationController(vsync: this, duration: _snapDuration);
+    _liftController = AnimationController(vsync: this, duration: _snapDuration)
+      ..addStatusListener(_onLiftStatusChanged);
     _searchController =
         AnimationController(vsync: this, duration: _searchFadeDuration);
   }
 
   @override
   void dispose() {
+    _liftController.removeStatusListener(_onLiftStatusChanged);
     _liftController.dispose();
     _searchController.dispose();
     _searchFieldController.dispose();
     super.dispose();
+  }
+
+  // Fires on every lift-controller direction change, not just the swipe
+  // gesture handlers below — this is the single place that reacts to the
+  // menu becoming fully open, regardless of which trigger opened it.
+  // `completed` means the animation finished animating *toward* 1 (fully
+  // open); `dismissed` means it finished animating back to 0 (fully
+  // closed) — see AnimationController.animateTo's forward/reverse status
+  // semantics.
+  void _onLiftStatusChanged(AnimationStatus status) {
+    if (status == AnimationStatus.completed && _liftController.value > 0.99) {
+      _autoOpenDefaultMenuItem();
+    }
+  }
+
+  // Pushes the configured default menu item once the menu is fully open.
+  // Guarded by `canPop()` — if something is already pushed (the user tapped
+  // a menu entry before the lift animation even finished, or this already
+  // ran for the current open), don't push again on top of it.
+  void _autoOpenDefaultMenuItem() {
+    final navigator = _menuNavigatorKey.currentState;
+    if (navigator == null || navigator.canPop()) return;
+
+    final defaultItem = widget.controller.settings.defaultOpenedMenuItem();
+    if (defaultItem == null) return;
+
+    final page = switch (defaultItem) {
+      'Liked genres' => _GenrePickerPage(controller: widget.controller),
+      _ => null,
+    };
+    if (page == null) return;
+
+    navigator.push(
+      CupertinoPageRoute(builder: (context) => _SwipeBackPop(child: page)),
+    );
   }
 
   // Listener (not GestureDetector) so this tracks raw pointer movement
@@ -189,6 +231,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
             child: Container(
               color: colors.surface,
               child: Navigator(
+                key: _menuNavigatorKey,
                 onGenerateRoute: (settings) => CupertinoPageRoute(
                   builder: (context) => _MenuHomePage(controller: controller),
                 ),

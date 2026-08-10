@@ -8,15 +8,18 @@ class SettingsRepository {
 
   SettingsRepository(this.database);
 
-  /// The menu item name (e.g. "Liked genres") to auto-expand when the menu
+  /// The menu item name (e.g. "Liked genres") to auto-open when the menu
   /// is revealed, or null for "None".
-  String? defaultExpandedMenuItem() {
+  ///
+  /// The backing column stays named `default_expanded_menu_item` — see
+  /// lib/core/db/app_database.dart — only the Dart-level name changed.
+  String? defaultOpenedMenuItem() {
     final rows = database.db.select('SELECT default_expanded_menu_item FROM app_state WHERE id = 0');
     if (rows.isEmpty) return null;
     return rows.first['default_expanded_menu_item'] as String?;
   }
 
-  void setDefaultExpandedMenuItem(String? menuItemName) {
+  void setDefaultOpenedMenuItem(String? menuItemName) {
     database.db.execute(
       'INSERT INTO app_state (id, default_expanded_menu_item) VALUES (0, ?) '
       'ON CONFLICT(id) DO UPDATE SET default_expanded_menu_item = excluded.default_expanded_menu_item',

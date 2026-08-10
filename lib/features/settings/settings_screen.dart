@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import '../../data/repositories/settings_repository.dart';
 
-/// Menu item names that can be set as the default expanded item on slide.
-/// "Liked genres" is the only expandable menu entry today — add new names
-/// here as more expandable menu items are introduced.
-const _expandableMenuItems = ['Liked genres'];
+/// Menu item names that can be set as the default opened item on slide.
+/// "Liked genres" is the only openable menu entry today — add new names
+/// here as more openable menu items are introduced.
+const _openableMenuItems = ['Liked genres'];
 
 /// The app's settings page. Currently a single setting: which menu item (if
-/// any) should already be expanded when the background menu is revealed.
+/// any) should already be open when the background menu is revealed.
 /// Selections apply immediately, matching the rest of the app's "no Save
 /// button" convention (see _GenrePickerPage in discovery_screen.dart).
 class SettingsPage extends StatefulWidget {
@@ -20,11 +20,11 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  late String? _selected = widget.settings.defaultExpandedMenuItem();
+  late String? _selected = widget.settings.defaultOpenedMenuItem();
 
   void _select(String? menuItemName) {
     setState(() => _selected = menuItemName);
-    widget.settings.setDefaultExpandedMenuItem(menuItemName);
+    widget.settings.setDefaultOpenedMenuItem(menuItemName);
   }
 
   @override
@@ -51,7 +51,7 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text('Default expanded menu item on slide', style: textTheme.titleMedium),
+              child: Text('Default opened menu item on slide', style: textTheme.titleMedium),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
@@ -65,7 +65,7 @@ class _SettingsPageState extends State<SettingsPage> {
               selected: _selected == null,
               onTap: () => _select(null),
             ),
-            for (final item in _expandableMenuItems)
+            for (final item in _openableMenuItems)
               _OptionTile(
                 label: item,
                 selected: _selected == item,
@@ -80,7 +80,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
 /// A single selectable row — label plus a checkmark when it's the active
 /// choice. Deliberately plain (a list, not a fancier radio widget) so adding
-/// more options later is just another entry in `_expandableMenuItems`.
+/// more options later is just another entry in `_openableMenuItems`.
 class _OptionTile extends StatelessWidget {
   final String label;
   final bool selected;

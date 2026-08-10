@@ -50,4 +50,26 @@ class DiscoveryController extends ChangeNotifier {
     final album = currentAlbum;
     return album == null ? '' : deepLinks.searchFallbackUrl(album);
   }
+
+  void toggleOwnsCd() {
+    final album = currentAlbum;
+    if (album == null) return;
+    final updated = !album.ownsCd;
+    albums.setOwnership(album.mbid, ownsCd: updated);
+    currentAlbum = album.copyWith(ownsCd: updated);
+    notifyListeners();
+  }
+
+  void toggleOwnsVinyl() {
+    final album = currentAlbum;
+    if (album == null) return;
+    final updated = !album.ownsVinyl;
+    albums.setOwnership(album.mbid, ownsVinyl: updated);
+    currentAlbum = album.copyWith(ownsVinyl: updated);
+    notifyListeners();
+  }
+
+  List<String> likedGenres() => recommendations.likedGenres();
+
+  void setLikedGenres(List<String> genres) => recommendations.setLikedGenres(genres);
 }

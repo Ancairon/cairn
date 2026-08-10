@@ -60,7 +60,19 @@ class AlbumRepository {
       firstReleaseYear: row['first_release_year'] as int?,
       genres: genresJson != null ? (jsonDecode(genresJson) as List).cast<String>() : const [],
       coverArtUrl: row['cover_art_url'] as String?,
+      ownsCd: (row['owns_cd'] as int) != 0,
+      ownsVinyl: (row['owns_vinyl'] as int) != 0,
     );
+  }
+
+  /// Toggles physical-ownership flags for an album already in the local DB.
+  void setOwnership(String mbid, {bool? ownsCd, bool? ownsVinyl}) {
+    if (ownsCd != null) {
+      database.db.execute('UPDATE albums SET owns_cd = ? WHERE mbid = ?', [ownsCd ? 1 : 0, mbid]);
+    }
+    if (ownsVinyl != null) {
+      database.db.execute('UPDATE albums SET owns_vinyl = ? WHERE mbid = ?', [ownsVinyl ? 1 : 0, mbid]);
+    }
   }
 
   void _writeLocal(Album album) {

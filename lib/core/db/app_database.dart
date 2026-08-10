@@ -11,7 +11,9 @@ const _schema = [
     first_release_year INTEGER,
     genres TEXT,
     cover_art_url TEXT,
-    metadata_fetched_at INTEGER
+    metadata_fetched_at INTEGER,
+    owns_cd INTEGER NOT NULL DEFAULT 0,
+    owns_vinyl INTEGER NOT NULL DEFAULT 0
   )
   ''',
   '''

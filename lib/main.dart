@@ -33,7 +33,7 @@ Future<void> main() async {
   final recommendations = RecommendationRepository(database, musicBrainz, listenBrainz, albums, ratings);
   final deepLinks = DeepLinkRepository(database, musicBrainz, odesli);
 
-  final controller = DiscoveryController(albums, ratings, recommendations, deepLinks);
+  final controller = DiscoveryController(albums, ratings, recommendations, deepLinks, musicBrainz);
 
   runApp(RecordReccomendApp(controller: controller));
 }

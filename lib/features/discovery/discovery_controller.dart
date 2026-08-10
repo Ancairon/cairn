@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../../data/models/album.dart';
+import '../../data/remote/musicbrainz_client.dart';
 import '../../data/repositories/album_repository.dart';
 import '../../data/repositories/rating_repository.dart';
 import '../../data/repositories/recommendation_repository.dart';
@@ -12,8 +13,9 @@ class DiscoveryController extends ChangeNotifier {
   final RatingRepository ratings;
   final RecommendationRepository recommendations;
   final DeepLinkRepository deepLinks;
+  final MusicBrainzClient musicBrainz;
 
-  DiscoveryController(this.albums, this.ratings, this.recommendations, this.deepLinks);
+  DiscoveryController(this.albums, this.ratings, this.recommendations, this.deepLinks, this.musicBrainz);
 
   Album? currentAlbum;
   Map<String, String> playLinks = {};
@@ -72,4 +74,16 @@ class DiscoveryController extends ChangeNotifier {
   List<String> likedGenres() => recommendations.likedGenres();
 
   void setLikedGenres(List<String> genres) => recommendations.setLikedGenres(genres);
+
+  /// Free-text search to seed a session from a specific album (search
+  /// overlay). Returns raw MusicBrainz release-group maps — title/artist
+  /// display fields, no local caching, since these are just picked from,
+  /// not necessarily kept.
+  Future<List<Map<String, dynamic>>> searchAlbums(String query) =>
+      musicBrainz.searchReleaseGroupsByText(query);
+
+  Future<void> startFromSearchResult(String releaseGroupMbid) => _run(() async {
+        final album = await albums.getOrFetch(releaseGroupMbid);
+        return recommendations.restartFrom(album);
+      });
 }

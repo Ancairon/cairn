@@ -47,7 +47,16 @@ const _schema = [
     id INTEGER PRIMARY KEY CHECK (id = 0),
     current_anchor_mbid TEXT,
     recent_pivot_buckets TEXT,
-    liked_genres TEXT
+    liked_genres TEXT,
+    default_expanded_menu_item TEXT
+  )
+  ''',
+  '''
+  CREATE TABLE IF NOT EXISTS saved_filters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    criteria_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
   )
   ''',
   '''

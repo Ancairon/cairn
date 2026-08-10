@@ -20,26 +20,35 @@ class DiscoveryScreen extends StatefulWidget {
 // release it plays one fixed open/close animation to whichever end state
 // the swipe direction indicated. Tapping the card while open, or swiping
 // down on the exposed background, closes it the same way.
-class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProviderStateMixin {
+class _DiscoveryScreenState extends State<DiscoveryScreen> with TickerProviderStateMixin {
   double _pendingRating = 3;
   String? _lastSeenAlbumMbid;
   double _dragAccum = 0;
   late AnimationController _liftController;
+  late AnimationController _searchController;
+  bool _searchOpen = false;
+  bool _searching = false;
+  List<Map<String, dynamic>> _searchResults = [];
+  final _searchFieldController = TextEditingController();
 
   static const _snapDuration = Duration(milliseconds: 600);
   static const _snapCurve = Curves.easeInOutCubicEmphasized;
   static const _dragTriggerDistance = 40.0;
+  static const _searchFadeDuration = Duration(milliseconds: 320);
 
   @override
   void initState() {
     super.initState();
     widget.controller.loadNext();
     _liftController = AnimationController(vsync: this, duration: _snapDuration);
+    _searchController = AnimationController(vsync: this, duration: _searchFadeDuration);
   }
 
   @override
   void dispose() {
     _liftController.dispose();
+    _searchController.dispose();
+    _searchFieldController.dispose();
     super.dispose();
   }
 
@@ -51,6 +60,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
     _dragAccum += details.delta.dy;
   }
 
+  // Background: swipe up has nothing further to open, so only the
+  // downward/close direction actually does anything here.
   void _onDragEnd(DragEndDetails details) {
     if (_dragAccum <= -_dragTriggerDistance) {
       _liftController.animateTo(1, duration: _snapDuration, curve: _snapCurve);
@@ -61,11 +72,59 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
     // during the drag, so there's nothing to snap back from.
   }
 
+  // Card: swiping down means something different depending on state —
+  // closed already means there's nowhere further down to go, so that's
+  // repurposed to open search instead.
+  void _onCardDragEnd(DragEndDetails details) {
+    final isOpen = _liftController.value > 0.5;
+    if (_dragAccum <= -_dragTriggerDistance && !isOpen) {
+      _liftController.animateTo(1, duration: _snapDuration, curve: _snapCurve);
+    } else if (_dragAccum >= _dragTriggerDistance) {
+      if (isOpen) {
+        _close();
+      } else if (!_searchOpen) {
+        _openSearch();
+      }
+    }
+  }
+
   // Always safe to call regardless of current state.
   void _close() {
     if (_liftController.value > 0.01) {
       _liftController.animateTo(0, duration: _snapDuration, curve: _snapCurve);
     }
+  }
+
+  void _openSearch() {
+    setState(() => _searchOpen = true);
+    _searchController.animateTo(1, duration: _searchFadeDuration, curve: Curves.easeOutCubic);
+  }
+
+  void _closeSearch() {
+    _searchController.animateTo(0, duration: _searchFadeDuration, curve: Curves.easeOutCubic).whenComplete(() {
+      if (!mounted) return;
+      setState(() {
+        _searchOpen = false;
+        _searchResults = [];
+        _searchFieldController.clear();
+      });
+    });
+  }
+
+  Future<void> _runSearch(DiscoveryController controller, String query) async {
+    if (query.trim().isEmpty) return;
+    setState(() => _searching = true);
+    final results = await controller.searchAlbums(query);
+    if (!mounted) return;
+    setState(() {
+      _searching = false;
+      _searchResults = results;
+    });
+  }
+
+  Future<void> _pickSearchResult(DiscoveryController controller, String mbid) async {
+    _closeSearch();
+    await controller.startFromSearchResult(mbid);
   }
 
   @override
@@ -132,7 +191,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
           child: GestureDetector(
             onVerticalDragStart: _onDragStart,
             onVerticalDragUpdate: _onDragUpdate,
-            onVerticalDragEnd: _onDragEnd,
+            onVerticalDragEnd: _onCardDragEnd,
             onTap: _close,
             child: Container(
               decoration: BoxDecoration(
@@ -141,15 +200,39 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
                 boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 16)],
               ),
               child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                  child: controller.isLoading
-                      ? _LoadingContent(color: colors.onSurfaceVariant)
-                      : controller.errorMessage != null
-                          ? _errorContent(controller)
-                          : album == null
-                              ? const Center(child: Text('No recommendation yet.'))
-                              : _albumContent(context, controller, album),
+                child: AnimatedBuilder(
+                  animation: _searchController,
+                  builder: (context, _) {
+                    final t = _searchController.value;
+                    return Stack(
+                      children: [
+                        Opacity(
+                          opacity: 1 - t,
+                          child: IgnorePointer(
+                            ignoring: t > 0.01,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                              child: controller.isLoading
+                                  ? _LoadingContent(color: colors.onSurfaceVariant)
+                                  : controller.errorMessage != null
+                                      ? _errorContent(controller)
+                                      : album == null
+                                          ? const Center(child: Text('No recommendation yet.'))
+                                          : _albumContent(context, controller, album),
+                            ),
+                          ),
+                        ),
+                        if (_searchOpen || t > 0.01)
+                          Opacity(
+                            opacity: t,
+                            child: IgnorePointer(
+                              ignoring: t < 0.99,
+                              child: _searchOverlay(context, controller),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -181,16 +264,59 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> with SingleTickerProv
     );
   }
 
+  Widget _searchOverlay(BuildContext context, DiscoveryController controller) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchFieldController,
+                  decoration: const InputDecoration(hintText: 'Search albums…', border: InputBorder.none),
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (query) => _runSearch(controller, query),
+                ),
+              ),
+              IconButton(icon: const Icon(Icons.close), onPressed: _closeSearch),
+            ],
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: _searching
+                ? _LoadingContent(color: Theme.of(context).colorScheme.onSurfaceVariant)
+                : ListView(
+                    children: _searchResults.map((r) {
+                      final artist = ((r['artist-credit'] as List?) ?? [])
+                          .cast<Map<String, dynamic>>()
+                          .map((c) => c['name'] as String)
+                          .join(', ');
+                      final year = (r['first-release-date'] as String?)?.split('-').first ?? 'unknown year';
+                      return ListTile(
+                        title: Text(r['title'] as String),
+                        subtitle: Text('$artist · $year'),
+                        onTap: () => _pickSearchResult(controller, r['id'] as String),
+                      );
+                    }).toList(),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _albumContent(BuildContext context, DiscoveryController controller, Album album) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // A fixed rectangle regardless of the source image's own
+        // A fixed 1:1 square regardless of the source image's own
         // proportions — the artwork is always cropped to fit it.
         ClipRRect(
           borderRadius: BorderRadius.circular(16),
           child: AspectRatio(
-            aspectRatio: 16 / 10,
+            aspectRatio: 1,
             child: album.coverArtUrl != null
                 ? Image.network(
                     album.coverArtUrl!,
@@ -356,6 +482,14 @@ class _GenrePickerPage extends StatefulWidget {
 class _GenrePickerPageState extends State<_GenrePickerPage> {
   late final Set<String> _selected = widget.controller.likedGenres().toSet();
 
+  // Applies immediately — there's no separate Save step. Leaving the page
+  // (back button, or the standard right-swipe) just keeps whatever's
+  // currently selected.
+  void _toggle(String genre, bool isSelected) {
+    setState(() => isSelected ? _selected.add(genre) : _selected.remove(genre));
+    widget.controller.setLikedGenres(_selected.toList());
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -384,22 +518,10 @@ class _GenrePickerPageState extends State<_GenrePickerPage> {
                   return FilterChip(
                     label: Text(genre),
                     selected: _selected.contains(genre),
-                    onSelected: (isSelected) => setState(() {
-                      isSelected ? _selected.add(genre) : _selected.remove(genre);
-                    }),
+                    onSelected: (isSelected) => _toggle(genre, isSelected),
                   );
                 }).toList(),
               ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: FilledButton(
-              onPressed: () {
-                widget.controller.setLikedGenres(_selected.toList());
-                Navigator.of(context).pop();
-              },
-              child: const Text('Save'),
             ),
           ),
         ],

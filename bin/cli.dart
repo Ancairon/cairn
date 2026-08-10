@@ -1,3 +1,6 @@
+// print() is this CLI's actual output, not a debug leftover — avoid_print
+// (from flutter_lints, aimed at app code) doesn't apply here.
+// ignore_for_file: avoid_print
 import 'dart:io';
 import 'package:record_reccomend/core/db/app_database.dart';
 import 'package:record_reccomend/core/network/http_client.dart';

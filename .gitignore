@@ -1,6 +1,9 @@
 # SOW tracking is a local planning aid — deliberately not published in this repo
 .agents/sow/
 
+# Local app data (the CLI's own SQLite database)
+*.db
+
 # Dart/Flutter
 .dart_tool/
 .packages

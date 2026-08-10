@@ -5,6 +5,8 @@ import '../../data/repositories/album_repository.dart';
 import '../../data/repositories/rating_repository.dart';
 import '../../data/repositories/recommendation_repository.dart';
 import '../../data/repositories/deep_link_repository.dart';
+import '../../data/repositories/saved_filter_repository.dart';
+import '../../data/repositories/settings_repository.dart';
 
 /// Drives the single discovery screen. Plain ChangeNotifier — no extra
 /// state-management package, matching the rest of this project.
@@ -14,8 +16,18 @@ class DiscoveryController extends ChangeNotifier {
   final RecommendationRepository recommendations;
   final DeepLinkRepository deepLinks;
   final MusicBrainzClient musicBrainz;
+  final SettingsRepository settings;
+  final SavedFilterRepository savedFilters;
 
-  DiscoveryController(this.albums, this.ratings, this.recommendations, this.deepLinks, this.musicBrainz);
+  DiscoveryController(
+    this.albums,
+    this.ratings,
+    this.recommendations,
+    this.deepLinks,
+    this.musicBrainz,
+    this.settings,
+    this.savedFilters,
+  );
 
   Album? currentAlbum;
   Map<String, String> playLinks = {};

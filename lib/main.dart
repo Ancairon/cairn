@@ -12,6 +12,8 @@ import 'data/repositories/album_repository.dart';
 import 'data/repositories/rating_repository.dart';
 import 'data/repositories/recommendation_repository.dart';
 import 'data/repositories/deep_link_repository.dart';
+import 'data/repositories/saved_filter_repository.dart';
+import 'data/repositories/settings_repository.dart';
 import 'features/discovery/discovery_controller.dart';
 import 'features/discovery/discovery_screen.dart';
 
@@ -32,8 +34,18 @@ Future<void> main() async {
   final ratings = RatingRepository(database);
   final recommendations = RecommendationRepository(database, musicBrainz, listenBrainz, albums, ratings);
   final deepLinks = DeepLinkRepository(database, musicBrainz, odesli);
+  final settings = SettingsRepository(database);
+  final savedFilters = SavedFilterRepository(database);
 
-  final controller = DiscoveryController(albums, ratings, recommendations, deepLinks, musicBrainz);
+  final controller = DiscoveryController(
+    albums,
+    ratings,
+    recommendations,
+    deepLinks,
+    musicBrainz,
+    settings,
+    savedFilters,
+  );
 
   runApp(RecordReccomendApp(controller: controller));
 }

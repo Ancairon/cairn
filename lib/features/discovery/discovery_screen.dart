@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../data/genre_pool.dart';
 import '../../data/models/album.dart';
+import '../rated_albums/rated_albums_screen.dart';
+import '../settings/settings_screen.dart';
 import 'discovery_controller.dart';
 
 class DiscoveryScreen extends StatefulWidget {
@@ -455,12 +457,36 @@ class _MenuHomePage extends StatelessWidget {
         alignment: Alignment.bottomCenter,
         child: Padding(
           padding: const EdgeInsets.only(bottom: 16),
-          child: _MenuAction(
-            icon: Icons.tune,
-            label: 'Liked genres',
-            onTap: () => Navigator.of(context).push(
-              CupertinoPageRoute(builder: (context) => _GenrePickerPage(controller: controller)),
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _MenuAction(
+                icon: Icons.tune,
+                label: 'Liked genres',
+                onTap: () => Navigator.of(context).push(
+                  CupertinoPageRoute(builder: (context) => _GenrePickerPage(controller: controller)),
+                ),
+              ),
+              _MenuAction(
+                icon: Icons.history,
+                label: 'Rated albums',
+                onTap: () => Navigator.of(context).push(
+                  CupertinoPageRoute(
+                    builder: (context) => RatedAlbumsPage(
+                      ratingRepository: controller.ratings,
+                      savedFilterRepository: controller.savedFilters,
+                    ),
+                  ),
+                ),
+              ),
+              _MenuAction(
+                icon: Icons.settings,
+                label: 'Settings',
+                onTap: () => Navigator.of(context).push(
+                  CupertinoPageRoute(builder: (context) => SettingsPage(settings: controller.settings)),
+                ),
+              ),
+            ],
           ),
         ),
       ),

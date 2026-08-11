@@ -35,6 +35,21 @@ class DeepLinkRepository {
     return 'https://music.youtube.com/search?q=$query';
   }
 
+  /// Search deep link scoped to Spotify's own web search, used when a
+  /// default-player-app preference is set but this album has no direct
+  /// Spotify link in [playLinksFor]'s result.
+  String spotifySearchUrl(Album album) {
+    final query = Uri.encodeComponent('${album.artistName} ${album.title}');
+    return 'https://open.spotify.com/search/$query';
+  }
+
+  /// Search deep link scoped to YouTube Music's own web search — same
+  /// purpose as [spotifySearchUrl], for the YouTube Music preference.
+  String youtubeMusicSearchUrl(Album album) {
+    final query = Uri.encodeComponent('${album.artistName} ${album.title}');
+    return 'https://music.youtube.com/search?q=$query';
+  }
+
   Future<Map<String, String>> _externalLinks(String albumMbid, String releaseMbid) async {
     final cached = database.db.select(
       'SELECT service, url FROM external_links WHERE album_mbid = ?',

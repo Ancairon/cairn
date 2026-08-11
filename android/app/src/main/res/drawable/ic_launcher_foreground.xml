@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground layer — the full-color vinyl record mark.
+  Geometry: uniformly scaled down from the originally-approved 111/25/7 disk/
+  label/hole radii (scale factor 78/111 ≈ 0.7027) so the disk fits inside
+  Android's official adaptive-icon "safe zone" — a 66dp-diameter circle
+  (33dp radius) centered in the 108dp canvas, guaranteed visible regardless
+  of the launcher's mask shape (circle/squircle/rounded-square/teardrop).
+  33dp * (256/108 viewport scale) = 78.2 units, so disk radius 78 sits just
+  inside that boundary. Label/hole and the formula's internal gaps (groove
+  spacing, gloss inset) were scaled by the same factor, preserving the exact
+  proportions of the originally-approved design rather than re-deriving new
+  ones. See design/app-icon-color-playground.html for that original, larger-
+  scale interactive version (still useful for iterating on the design itself
+  — its sliders were not changed to match this safe-zone-fitted asset).
+  Colors from seed #e21e26, Material 3 Tonal Spot variant:
+    disk  = primary  · tone 18  (#511916)
+    ring  = primary  · tone 38  (#8a4640)
+    label = tertiary · tone 72  (#c9ad78)
+    ink   = neutral  · tone 94  (#fceae8)
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+    <!-- Disk -->
+    <path
+        android:pathData="M50,128 A78,78 0 1,0 206,128 A78,78 0 1,0 50,128 Z"
+        android:fillColor="#511916"/>
+    <!-- Grooves: 70 / 47 / 24, fading opacity+width toward the center -->
+    <path
+        android:pathData="M58,128 A70,70 0 1,0 198,128 A70,70 0 1,0 58,128 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#8a4640"
+        android:strokeAlpha="0.8"
+        android:strokeWidth="4"/>
+    <path
+        android:pathData="M81,128 A47,47 0 1,0 175,128 A47,47 0 1,0 81,128 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#8a4640"
+        android:strokeAlpha="0.65"
+        android:strokeWidth="3.5"/>
+    <path
+        android:pathData="M104,128 A24,24 0 1,0 152,128 A24,24 0 1,0 104,128 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#8a4640"
+        android:strokeAlpha="0.5"
+        android:strokeWidth="3"/>
+    <!-- Gloss highlight: 60° arc at r=68, symmetric about the upper-left
+         diagonal through the center -->
+    <path
+        android:pathData="M62.32,110.40 A68,68 0 0,1 110.40,62.32"
+        android:fillColor="#00000000"
+        android:strokeColor="#fceae8"
+        android:strokeAlpha="0.6"
+        android:strokeLineCap="round"
+        android:strokeWidth="8"/>
+    <!-- Center label -->
+    <path
+        android:pathData="M110,128 A18,18 0 1,0 146,128 A18,18 0 1,0 110,128 Z"
+        android:fillColor="#c9ad78"/>
+    <!-- Spindle hole: filled with the canvas color (not a real cutout — the
+         foreground layer has no transparency concept here since it's always
+         drawn over the background layer, which is this same canvas color) -->
+    <path
+        android:pathData="M123,128 A5,5 0 1,0 133,128 A5,5 0 1,0 123,128 Z"
+        android:fillColor="#2f0203"/>
+</vector>

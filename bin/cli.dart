@@ -2,23 +2,24 @@
 // (from flutter_lints, aimed at app code) doesn't apply here.
 // ignore_for_file: avoid_print
 import 'dart:io';
-import 'package:record_reccomend/core/db/app_database.dart';
-import 'package:record_reccomend/core/network/http_client.dart';
-import 'package:record_reccomend/core/network/response_cache.dart';
-import 'package:record_reccomend/data/remote/musicbrainz_client.dart';
-import 'package:record_reccomend/data/remote/coverart_client.dart';
-import 'package:record_reccomend/data/remote/listenbrainz_client.dart';
-import 'package:record_reccomend/data/remote/odesli_client.dart';
-import 'package:record_reccomend/data/repositories/album_repository.dart';
-import 'package:record_reccomend/data/repositories/rating_repository.dart';
-import 'package:record_reccomend/data/repositories/recommendation_repository.dart';
-import 'package:record_reccomend/data/repositories/deep_link_repository.dart';
-import 'package:record_reccomend/data/repositories/export_repository.dart';
-import 'package:record_reccomend/data/models/album.dart';
-import 'package:record_reccomend/data/genre_pool.dart';
+import 'package:cairn/core/db/app_database.dart';
+import 'package:cairn/core/network/http_client.dart';
+import 'package:cairn/core/network/response_cache.dart';
+import 'package:cairn/data/remote/musicbrainz_client.dart';
+import 'package:cairn/data/remote/coverart_client.dart';
+import 'package:cairn/data/remote/listenbrainz_client.dart';
+import 'package:cairn/data/remote/odesli_client.dart';
+import 'package:cairn/data/repositories/album_repository.dart';
+import 'package:cairn/data/repositories/rating_repository.dart';
+import 'package:cairn/data/repositories/recommendation_repository.dart';
+import 'package:cairn/data/repositories/deep_link_repository.dart';
+import 'package:cairn/data/repositories/export_repository.dart';
+import 'package:cairn/data/models/album.dart';
+import 'package:cairn/data/genre_pool.dart';
 
 Future<void> main(List<String> args) async {
-  final database = AppDatabase.open('record_reccomend.db');
+  AppDatabase.migrateLegacyFile('record_reccomend.db', 'cairn.db');
+  final database = AppDatabase.open('cairn.db');
   final http = ApiHttpClient();
   final cache = ResponseCache(database);
 

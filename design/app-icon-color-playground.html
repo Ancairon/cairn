@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cairn app icon — color playground</title>
+  <style>
+    :root {
+      --canvas: #0d0304; --disk: #260a0b; --ring: #5c2224; --label: #ffb3ac; --ink: #f4f0f6;
+      --mono-shape: #e5dfe8; --mono-bg: #2b2630;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 2rem; background: #131316; color: #f2eff4; font: 16px/1.45 system-ui, sans-serif; }
+    main { max-width: 46rem; margin: auto; }
+    h1 { margin-top: 0; font-size: 1.3rem; }
+    p.intro { color: #a8a3ae; }
+    .row { display: flex; gap: .75rem; align-items: center; margin: 1.25rem 0; }
+    .sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 1rem; margin: 1.25rem 0; padding: 1rem 1.1rem; background: #1d1d21; border-radius: .75rem; border: 1px solid #333038; }
+    .slider-field { display: grid; gap: .35rem; }
+    .slider-field .head { display: flex; justify-content: space-between; font-size: .8rem; color: #cfc9d6; }
+    .slider-field .head output { font: .8rem ui-monospace, monospace; color: #f2eff4; }
+    .slider-field input[type="range"] { width: 100%; accent-color: #e21e26; }
+    input[type="text"] { flex: 1; font: 1.1rem ui-monospace, monospace; padding: .6rem .75rem; border-radius: .5rem; border: 1px solid #333038; background: #1d1d21; color: #f2eff4; }
+    input[type="color"] { width: 3.2rem; height: 2.8rem; padding: 0; border: 0; border-radius: .5rem; background: transparent; }
+    .status { min-height: 1.3em; font: .85rem ui-monospace, monospace; color: #a8a3ae; margin-bottom: 1rem; white-space: pre-wrap; }
+    .status.error { color: #ff8a80; }
+    .previews { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    @media (max-width: 640px) { .previews { grid-template-columns: 1fr; } }
+    .preview { display: grid; place-items: center; gap: .75rem; padding: 2rem 1rem 1.25rem; border-radius: 1.5rem; }
+    .preview.generic { background: var(--canvas); }
+    .preview.mono { background: var(--mono-bg); }
+    .preview svg { width: min(80%, 12rem); height: auto; }
+    .preview .caption { font-size: .8rem; color: #cfc9d6; }
+    .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; margin-top: 1.25rem; font-size: .8rem; }
+    .legend div { display: flex; align-items: center; gap: .5rem; padding: .35rem .5rem; background: #1d1d21; border-radius: .4rem; }
+    .legend .swatch { width: 1rem; height: 1rem; border-radius: 50%; flex: none; border: 1px solid rgba(255,255,255,.15); }
+    .legend .part { color: #f2eff4; }
+    .legend .role { color: #a8a3ae; font: .72rem ui-monospace, monospace; }
+    footer { margin-top: 2rem; color: #a8a3ae; font-size: .8rem; }
+    footer code { font: .8rem ui-monospace, monospace; color: #f2eff4; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>App icon color playground</h1>
+    <p class="intro">
+      One seed color in, two previews out: the everyday full-color icon, and the
+      Android 13+ "themed icon" silhouette that the OS re-tints to match your
+      wallpaper. Both are derived from the real Material 3 algorithm, using the
+      <strong>Tonal Spot</strong> variant — the one that keeps colors visibly
+      related to what you typed (Cairn's own app theme separately uses the more
+      hue-shifting "Expressive" variant, which isn't a good fit for picking an
+      icon color you can actually reason about). Three elements: disk, ring,
+      center label — canvas is always the darkest tone, the disk right after it.
+    </p>
+
+    <div class="row">
+      <input id="hex" type="text" value="#e21e26" spellcheck="false">
+      <input id="picker" type="color" value="#e21e26">
+    </div>
+    <div class="status" id="status"></div>
+
+    <div class="sliders">
+      <div class="slider-field">
+        <div class="head"><span>Disk radius</span><output id="disk-radius-out">78</output></div>
+        <input id="disk-radius" type="range" min="70" max="120" value="78" step="1">
+      </div>
+      <div class="slider-field">
+        <div class="head"><span>Label radius</span><output id="label-radius-out">18</output></div>
+        <input id="label-radius" type="range" min="10" max="45" value="18" step="1">
+      </div>
+      <div class="slider-field">
+        <div class="head"><span>Hole radius</span><output id="hole-radius-out">5</output></div>
+        <input id="hole-radius" type="range" min="2" max="15" value="5" step="1">
+      </div>
+      <div class="slider-field">
+        <div class="head"><span>Grooves</span><output id="groove-count-out">3</output></div>
+        <input id="groove-count" type="range" min="0" max="5" value="3" step="1">
+      </div>
+    </div>
+
+    <div class="previews">
+      <section class="preview generic" aria-label="Generic full-color icon preview">
+        <svg viewBox="0 0 256 256" role="img" aria-label="Full-color vinyl record icon">
+          <circle id="generic-disk" cx="128" cy="128" r="108" fill="var(--disk)"/>
+          <!-- Groove circles are generated by renderGeometry(), count/spacing
+               driven by the sliders — see the Grooves slider. -->
+          <g id="generic-grooves"></g>
+          <circle id="generic-label" cx="128" cy="128" r="25" fill="var(--label)"/>
+          <circle id="generic-hole" cx="128" cy="128" r="7" fill="var(--canvas)"/>
+          <!-- Gloss highlight: a true 60° arc, symmetric about the upper-left
+               diagonal (128,128), radius kept proportional to the disk radius
+               by renderGeometry() (diskRadius - 14). -->
+          <path id="generic-gloss" d="M37.2 103.7 A94 94 0 0 1 103.7 37.2" fill="none" stroke="var(--ink)" stroke-linecap="round" stroke-opacity=".6" stroke-width="8"/>
+        </svg>
+        <span class="caption">Generic (default, everyone sees this)</span>
+      </section>
+      <section class="preview mono" aria-label="Themed monochrome icon preview">
+        <svg viewBox="0 0 256 256" role="img" aria-label="Monochrome themed vinyl record icon">
+          <!-- No disk shape at all — just the grooves, gloss highlight, and
+               center label, one flat tone, floating on full transparency.
+               A real Android 13+ launcher supplies its OWN background behind
+               this layer; baking in a disk shape here would fight whatever
+               the OS actually renders behind it.
+               The spindle hole is a genuine cutout via <mask>, not a fill —
+               drawing a transparent shape on TOP of already-opaque shapes
+               does nothing in SVG's painter model; only a mask can punch
+               through what's already been painted underneath it. -->
+          <defs>
+            <mask id="mono-hole-mask">
+              <rect x="0" y="0" width="256" height="256" fill="white"/>
+              <circle id="mono-hole" cx="128" cy="128" r="7" fill="black"/>
+            </mask>
+          </defs>
+          <g mask="url(#mono-hole-mask)">
+            <g id="mono-grooves"></g>
+            <path id="mono-gloss" d="M37.2 103.7 A94 94 0 0 1 103.7 37.2" fill="none" stroke="var(--mono-shape)" stroke-linecap="round" stroke-width="8"/>
+            <circle id="mono-label" cx="128" cy="128" r="25" fill="var(--mono-shape)"/>
+          </g>
+        </svg>
+        <span class="caption">Themed / monochrome (OS re-tints this)</span>
+      </section>
+    </div>
+
+    <div class="legend" id="legend"></div>
+
+    <footer>
+      Uses <a href="https://www.npmjs.com/package/@material/material-color-utilities" style="color:#b9a6ff">@material/material-color-utilities</a>
+      v0.4.0 from jsDelivr. <strong>Open this over http://, not by double-clicking
+      the file</strong> — Chrome and most browsers block ES module imports (even to
+      a remote CDN) when a page's origin is <code>file://</code>. Want the full
+      role-by-role breakdown instead of just the icon? See
+      <code>m3-palette-generator.html</code> in this same folder.
+    </footer>
+  </main>
+
+  <script>
+    // Geometry (disk/label/hole radius, groove count) is independent of the
+    // color loading below — it's plain arithmetic, no library needed — so it
+    // runs immediately and works even if the CDN import never resolves.
+    (() => {
+      const SVG_NS = 'http://www.w3.org/2000/svg';
+      const diskSlider = document.getElementById('disk-radius');
+      const labelSlider = document.getElementById('label-radius');
+      const holeSlider = document.getElementById('hole-radius');
+      const grooveSlider = document.getElementById('groove-count');
+      const diskOut = document.getElementById('disk-radius-out');
+      const labelOut = document.getElementById('label-radius-out');
+      const holeOut = document.getElementById('hole-radius-out');
+      const grooveOut = document.getElementById('groove-count-out');
+
+      const genericDisk = document.getElementById('generic-disk');
+      const genericLabel = document.getElementById('generic-label');
+      const genericHole = document.getElementById('generic-hole');
+      const genericGrooves = document.getElementById('generic-grooves');
+      const genericGloss = document.getElementById('generic-gloss');
+      const monoLabel = document.getElementById('mono-label');
+      const monoHole = document.getElementById('mono-hole');
+      const monoGrooves = document.getElementById('mono-grooves');
+      const monoGloss = document.getElementById('mono-gloss');
+
+      function makeGrooveCircle(stroke, radius, opacity, width) {
+        const circle = document.createElementNS(SVG_NS, 'circle');
+        circle.setAttribute('cx', 128);
+        circle.setAttribute('cy', 128);
+        circle.setAttribute('r', radius.toFixed(1));
+        circle.setAttribute('fill', 'none');
+        circle.setAttribute('stroke', stroke);
+        circle.setAttribute('stroke-opacity', opacity.toFixed(2));
+        circle.setAttribute('stroke-width', width.toFixed(2));
+        return circle;
+      }
+
+      function renderGeometry() {
+        const diskR = Number(diskSlider.value);
+        const labelR = Number(labelSlider.value);
+        const holeR = Number(holeSlider.value);
+        const grooveCount = Number(grooveSlider.value);
+
+        diskOut.textContent = diskR;
+        labelOut.textContent = labelR;
+        holeOut.textContent = holeR;
+        grooveOut.textContent = grooveCount;
+
+        genericDisk.setAttribute('r', diskR);
+        genericLabel.setAttribute('r', labelR);
+        monoLabel.setAttribute('r', labelR);
+        genericHole.setAttribute('r', holeR);
+        monoHole.setAttribute('r', holeR);
+
+        // Grooves: evenly spaced between just inside the disk edge and just
+        // outside the label. In the generic mark they fade slightly toward
+        // the center for depth. In the monochrome mark there is no gradient
+        // at all — every groove sits at the same flat "shape" opacity (1),
+        // exactly two levels total across the whole mark: dim backdrop, full
+        // shape. No third, fourth, fifth tone sneaking in via a per-groove fade.
+        // Gaps scale WITH disk radius (proportional to the originally-approved
+        // 111-radius baseline), not fixed absolute units — otherwise shrinking
+        // the disk (e.g. to fit Android's adaptive-icon safe zone) makes the
+        // gaps relatively larger and the composition looks cramped/different
+        // from what was actually approved. At diskR=111 this reduces to
+        // exactly the original fixed offsets (12/8/14); scale === 1.
+        const scale = diskR / 111;
+        genericGrooves.innerHTML = '';
+        monoGrooves.innerHTML = '';
+        const outerBound = diskR - 12 * scale;
+        const innerBound = labelR + 8 * scale;
+        if (grooveCount > 0 && outerBound > innerBound) {
+          const step = grooveCount > 1 ? (outerBound - innerBound) / (grooveCount - 1) : 0;
+          for (let i = 0; i < grooveCount; i++) {
+            const r = grooveCount > 1 ? outerBound - step * i : outerBound;
+            const opacity = Math.max(0.3, 0.8 - i * 0.15);
+            const width = Math.max(2, 4 - i * 0.5);
+            genericGrooves.appendChild(makeGrooveCircle('var(--ring)', r, opacity, width));
+            monoGrooves.appendChild(makeGrooveCircle('var(--mono-shape)', r, 1, width));
+          }
+        }
+
+        // Gloss arc stays proportional to the disk (radius = diskR - 14 * scale),
+        // same true 60° sweep symmetric about the upper-left diagonal, shared
+        // by both previews — full strength ("shape") in the monochrome one.
+        const glossR = diskR - 14 * scale;
+        const rad = (deg) => (deg * Math.PI) / 180;
+        const p1x = 128 + glossR * Math.cos(rad(195));
+        const p1y = 128 + glossR * Math.sin(rad(195));
+        const p2x = 128 + glossR * Math.cos(rad(255));
+        const p2y = 128 + glossR * Math.sin(rad(255));
+        const glossPath = `M${p1x.toFixed(1)} ${p1y.toFixed(1)} A${glossR} ${glossR} 0 0 1 ${p2x.toFixed(1)} ${p2y.toFixed(1)}`;
+        genericGloss.setAttribute('d', glossPath);
+        monoGloss.setAttribute('d', glossPath);
+      }
+
+      for (const slider of [diskSlider, labelSlider, holeSlider, grooveSlider]) {
+        slider.addEventListener('input', renderGeometry);
+      }
+      renderGeometry();
+    })();
+
+    (async () => {
+      const statusEl = document.getElementById('status');
+      const legendEl = document.getElementById('legend');
+      statusEl.textContent = 'Loading Material Color Utilities from cdn.jsdelivr.net…';
+
+      let mcu;
+      try {
+        mcu = await import('https://cdn.jsdelivr.net/npm/@material/material-color-utilities@0.4.0/+esm');
+      } catch (err) {
+        statusEl.classList.add('error');
+        if (location.protocol === 'file:') {
+          statusEl.textContent =
+            "Can't load the color library because this page was opened as a local file " +
+            '(file://…). Browsers block module imports from that origin, even to a remote ' +
+            'CDN. Serve this folder over http:// instead, e.g.:\n' +
+            '  python3 -m http.server 8934 --bind 127.0.0.1\n' +
+            'then open http://127.0.0.1:8934/app-icon-color-playground.html.';
+        } else {
+          statusEl.textContent =
+            'Could not load the color library from cdn.jsdelivr.net (' + err.message + '). ' +
+            'Check your internet connection or anything that might block that domain, then reload.';
+        }
+        console.error(err);
+        return;
+      }
+
+      const { Hct, argbFromHex, hexFromArgb, MaterialDynamicColors, SchemeTonalSpot } = mcu;
+
+      // Four elements, deliberately assigned STRICT ascending tones (0=black,
+      // 100=white) rather than semantic roles like "primary"/"secondary" —
+      // roles don't guarantee any particular ordering relative to each other
+      // across different seed colors, and the one hard requirement here is
+      // "canvas is always the darkest, the disk is right after it". Tones are
+      // an exact perceptual-lightness scale, so picking them directly is the
+      // only way to *guarantee* that ordering for any seed color, not just
+      // the one this happens to be tuned for right now.
+      //   canvas (6)  <  disk (18)  <  ring (38)  <  label (72)  <  ink (94)
+      // Canvas/disk/ring all come from the PRIMARY palette (one hue family, a
+      // dark-to-mid gradient); label deliberately breaks to the TERTIARY
+      // palette so it reads as a distinct accent, the way a real vinyl
+      // record's paper label is a different color from the black disc.
+      // The monochrome/themed preview is illustrative only — a real Android 13+
+      // launcher tints that layer using the PHONE's own wallpaper-derived color,
+      // not anything baked into the app. `mono-shape`/`mono-bg` here just use
+      // onSurface/surfaceContainerHighest from the same generated scheme so the
+      // preview still reacts to your seed, for a rough sense of contrast.
+      const PART_ROLES = [
+        { part: 'canvas', label: 'Canvas', source: (s) => hexFromArgb(s.primaryPalette.tone(6)), role: 'primary · tone 6' },
+        { part: 'disk', label: 'Disk', source: (s) => hexFromArgb(s.primaryPalette.tone(18)), role: 'primary · tone 18' },
+        { part: 'ring', label: 'Ring', source: (s) => hexFromArgb(s.primaryPalette.tone(38)), role: 'primary · tone 38' },
+        { part: 'label', label: 'Center label', source: (s) => hexFromArgb(s.tertiaryPalette.tone(72)), role: 'tertiary · tone 72' },
+        { part: 'ink', label: 'Gloss', source: (s) => hexFromArgb(s.neutralPalette.tone(94)), role: 'neutral · tone 94' },
+        { part: 'mono-shape', label: 'Themed shape (preview only)', source: (s) => hexFromArgb(MaterialDynamicColors.onSurface.getArgb(s)), role: 'onSurface' },
+        { part: 'mono-bg', label: 'Themed backdrop (preview only)', source: (s) => hexFromArgb(MaterialDynamicColors.surfaceContainerHighest.getArgb(s)), role: 'surfaceContainerHighest' },
+      ];
+
+      const hexInput = document.getElementById('hex');
+      const pickerInput = document.getElementById('picker');
+
+      function regenerate() {
+        const hex = hexInput.value.trim();
+        if (!/^#[0-9a-f]{6}$/i.test(hex)) {
+          statusEl.textContent = 'Enter a 6-digit hex color, e.g. #e21e26.';
+          statusEl.classList.add('error');
+          return;
+        }
+        try {
+          statusEl.classList.remove('error');
+          pickerInput.value = hex;
+
+          const seedHct = Hct.fromInt(argbFromHex(hex));
+          const scheme = new SchemeTonalSpot(seedHct, false, 0.0);
+
+          legendEl.innerHTML = '';
+          for (const { part, label, source, role } of PART_ROLES) {
+            const value = source(scheme);
+            document.documentElement.style.setProperty('--' + part, value);
+            const row = document.createElement('div');
+            row.innerHTML =
+              `<span class="swatch" style="background:${value}"></span>` +
+              `<span class="part">${label}</span>` +
+              `<span class="role">${role}</span>`;
+            legendEl.appendChild(row);
+          }
+
+          statusEl.textContent = `Seed HCT — hue ${seedHct.hue.toFixed(1)}°, chroma ${seedHct.chroma.toFixed(1)}, tone ${seedHct.tone.toFixed(1)}`;
+        } catch (err) {
+          statusEl.classList.add('error');
+          statusEl.textContent = 'Render error: ' + err.message + ' (see browser console for details).';
+          console.error(err);
+        }
+      }
+
+      hexInput.addEventListener('input', regenerate);
+      pickerInput.addEventListener('input', () => { hexInput.value = pickerInput.value; regenerate(); });
+
+      regenerate();
+    })();
+  </script>
+</body>
+</html>

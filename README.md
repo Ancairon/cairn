@@ -1,4 +1,4 @@
-# record_reccomend
+# Cairn
 
 An open-source, album-first music discovery app. See an album, play it via a deep link into whatever streaming app you have installed, rate it 1-5 stars, and get a new recommendation based on that rating — built around full-album discovery rather than the repeat-track optimization most streaming algorithms favor.
 
@@ -21,7 +21,7 @@ dart run bin/cli.dart export-json               # export your journal as JSON
 dart run bin/cli.dart export-csv                # export your journal as CSV
 ```
 
-Local data lives in `record_reccomend.db` (SQLite) in the working directory — not committed to git.
+Local data lives in `cairn.db` (SQLite) in the working directory — not committed to git.
 
 ## Running tests
 

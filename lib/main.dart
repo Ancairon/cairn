@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'core/network/artwork_cache.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:path_provider/path_provider.dart';
 import 'core/db/app_database.dart';
@@ -14,14 +17,29 @@ import 'data/repositories/recommendation_repository.dart';
 import 'data/repositories/deep_link_repository.dart';
 import 'data/repositories/saved_filter_repository.dart';
 import 'data/repositories/settings_repository.dart';
+import 'data/repositories/backup_repository.dart';
 import 'features/discovery/discovery_controller.dart';
 import 'features/discovery/discovery_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(ArtworkCache.collect());
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    systemNavigationBarContrastEnforced: false,
+  ));
 
   final docsDir = await getApplicationDocumentsDirectory();
-  final database = AppDatabase.open('${docsDir.path}/record_reccomend.db');
+  AppDatabase.migrateLegacyFile(
+    '${docsDir.path}/record_reccomend.db',
+    '${docsDir.path}/cairn.db',
+  );
+  final database = AppDatabase.open('${docsDir.path}/cairn.db');
   final http = ApiHttpClient();
   final cache = ResponseCache(database);
 
@@ -32,10 +50,12 @@ Future<void> main() async {
 
   final albums = AlbumRepository(database, musicBrainz, coverArt);
   final ratings = RatingRepository(database);
-  final recommendations = RecommendationRepository(database, musicBrainz, listenBrainz, albums, ratings);
+  final recommendations = RecommendationRepository(
+      database, musicBrainz, listenBrainz, albums, ratings);
   final deepLinks = DeepLinkRepository(database, musicBrainz, odesli);
   final settings = SettingsRepository(database);
   final savedFilters = SavedFilterRepository(database);
+  final backups = BackupRepository(database);
 
   final controller = DiscoveryController(
     albums,
@@ -45,18 +65,19 @@ Future<void> main() async {
     musicBrainz,
     settings,
     savedFilters,
+    backups,
   );
 
-  runApp(RecordReccomendApp(controller: controller));
+  runApp(CairnApp(controller: controller));
 }
 
-class RecordReccomendApp extends StatefulWidget {
+class CairnApp extends StatefulWidget {
   final DiscoveryController controller;
 
-  const RecordReccomendApp({super.key, required this.controller});
+  const CairnApp({super.key, required this.controller});
 
   @override
-  State<RecordReccomendApp> createState() => _RecordReccomendAppState();
+  State<CairnApp> createState() => _CairnAppState();
 }
 
 // DynamicColorBuilder only ever reads the system palette once, in its own
@@ -67,7 +88,7 @@ class RecordReccomendApp extends StatefulWidget {
 // so we watch for that resume and force DynamicColorBuilder to re-mount
 // (via a fresh Key, since that's the only way to make it re-run initState)
 // rather than trusting it to notice on its own.
-class _RecordReccomendAppState extends State<RecordReccomendApp> with WidgetsBindingObserver {
+class _CairnAppState extends State<CairnApp> with WidgetsBindingObserver {
   int _paletteGeneration = 0;
 
   @override
@@ -101,7 +122,7 @@ class _RecordReccomendAppState extends State<RecordReccomendApp> with WidgetsBin
       key: ValueKey(_paletteGeneration),
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
         return MaterialApp(
-          title: 'record_reccomend',
+          title: 'Cairn',
           themeMode: ThemeMode.system,
           theme: ThemeData(
             colorScheme: lightDynamic ??

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 13+ "themed icon" layer. Android replaces every opaque pixel here
+  with its own wallpaper-derived tint (Settings > Wallpaper & style > Themed
+  icons) — the actual color used (#FF000000, opaque black) is irrelevant
+  beyond "fully opaque where the mark should show"; only the alpha shape
+  matters. No disk/background shape (pure transparency outside the mark);
+  one flat alpha shape, no opacity gradient. Same safe-zone-fitted geometry
+  as ic_launcher_foreground.xml (see that file's header comment for the
+  scale-factor derivation) — disk radius 78 is used only to derive
+  proportional groove/gloss placement, not drawn itself.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="256"
+    android:viewportHeight="256">
+    <!-- Grooves: 70 / 47 / 24, same widths as the color version, flat alpha -->
+    <path
+        android:pathData="M58,128 A70,70 0 1,0 198,128 A70,70 0 1,0 58,128 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="4"/>
+    <path
+        android:pathData="M81,128 A47,47 0 1,0 175,128 A47,47 0 1,0 81,128 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3.5"/>
+    <path
+        android:pathData="M104,128 A24,24 0 1,0 152,128 A24,24 0 1,0 104,128 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="3"/>
+    <!-- Gloss highlight -->
+    <path
+        android:pathData="M62.32,110.40 A68,68 0 0,1 110.40,62.32"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeLineCap="round"
+        android:strokeWidth="8"/>
+    <!-- Center label with a genuine transparent hole: combining the label
+         circle and the hole circle in ONE path with fillType="evenOdd" is
+         what actually punches a hole in a vector drawable — a same-color
+         circle drawn on top does nothing, since VectorDrawable paints in
+         simple back-to-front order like SVG. -->
+    <path
+        android:pathData="M110,128 A18,18 0 1,0 146,128 A18,18 0 1,0 110,128 Z M123,128 A5,5 0 1,0 133,128 A5,5 0 1,0 123,128 Z"
+        android:fillType="evenOdd"
+        android:fillColor="#FF000000"/>
+</vector>

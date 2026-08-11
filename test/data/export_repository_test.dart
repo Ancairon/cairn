@@ -1,12 +1,12 @@
 import 'package:test/test.dart';
-import 'package:record_reccomend/core/db/app_database.dart';
-import 'package:record_reccomend/core/network/http_client.dart';
-import 'package:record_reccomend/core/network/response_cache.dart';
-import 'package:record_reccomend/data/remote/musicbrainz_client.dart';
-import 'package:record_reccomend/data/remote/coverart_client.dart';
-import 'package:record_reccomend/data/repositories/album_repository.dart';
-import 'package:record_reccomend/data/repositories/rating_repository.dart';
-import 'package:record_reccomend/data/repositories/export_repository.dart';
+import 'package:cairn/core/db/app_database.dart';
+import 'package:cairn/core/network/http_client.dart';
+import 'package:cairn/core/network/response_cache.dart';
+import 'package:cairn/data/remote/musicbrainz_client.dart';
+import 'package:cairn/data/remote/coverart_client.dart';
+import 'package:cairn/data/repositories/album_repository.dart';
+import 'package:cairn/data/repositories/rating_repository.dart';
+import 'package:cairn/data/repositories/export_repository.dart';
 
 void main() {
   test('CSV export escapes commas/quotes, JSON export includes rating fields', () async {

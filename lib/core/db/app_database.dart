@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:sqlite3/sqlite3.dart';
 
 const _schema = [
@@ -35,6 +37,13 @@ const _schema = [
   )
   ''',
   '''
+  CREATE TABLE IF NOT EXISTS album_skip_penalties (
+    album_mbid TEXT PRIMARY KEY,
+    skip_count INTEGER NOT NULL,
+    last_skipped_at INTEGER NOT NULL
+  )
+  ''',
+  '''
   CREATE TABLE IF NOT EXISTS track_favorites (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     track_id INTEGER NOT NULL REFERENCES tracks(id),
@@ -48,7 +57,12 @@ const _schema = [
     current_anchor_mbid TEXT,
     recent_pivot_buckets TEXT,
     liked_genres TEXT,
-    default_expanded_menu_item TEXT
+    default_expanded_menu_item TEXT,
+    recent_fallback_seed_mbids TEXT,
+    default_player_app TEXT,
+    rated_albums_sort TEXT,
+    rated_albums_view TEXT,
+    rated_albums_size TEXT
   )
   ''',
   '''
@@ -87,6 +101,31 @@ const _schema = [
   ''',
 ];
 
+// CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists, so a
+// plain schema addition never reaches an install that updates on top of an
+// existing app (adb install -r preserves the on-device DB). This is a
+// deliberately minimal, additive-only migration — it only ever adds a
+// missing column with its declared default, never renames/drops/alters
+// existing data. See .agents/skills/project-android-toolchain/SKILL.md.
+const _additiveColumns = {
+  'app_state': [
+    'current_anchor_mbid TEXT',
+    'recent_pivot_buckets TEXT',
+    'liked_genres TEXT',
+    'default_expanded_menu_item TEXT',
+    'recent_fallback_seed_mbids TEXT',
+    'default_player_app TEXT',
+    'last_shown_album_mbid TEXT',
+    'rated_albums_sort TEXT',
+    'rated_albums_view TEXT',
+    'rated_albums_size TEXT',
+    'auto_backups_enabled INTEGER NOT NULL DEFAULT 0',
+    'backup_consent TEXT',
+    'backup_folder_path TEXT',
+    'last_backup_at INTEGER',
+  ],
+};
+
 /// Opens the local SQLite database and ensures the schema exists.
 /// See .agents/sow/specs/architecture.md for the full schema rationale.
 class AppDatabase {
@@ -96,6 +135,22 @@ class AppDatabase {
     for (final statement in _schema) {
       db.execute(statement);
     }
+    _ensureAdditiveColumns();
+  }
+
+  void _ensureAdditiveColumns() {
+    for (final entry in _additiveColumns.entries) {
+      final existingColumns = db
+          .select('PRAGMA table_info(${entry.key})')
+          .map((row) => row['name'] as String)
+          .toSet();
+      for (final columnDef in entry.value) {
+        final columnName = columnDef.split(' ').first;
+        if (!existingColumns.contains(columnName)) {
+          db.execute('ALTER TABLE ${entry.key} ADD COLUMN $columnDef');
+        }
+      }
+    }
   }
 
   factory AppDatabase.open(String path) => AppDatabase(sqlite3.open(path));
@@ -103,4 +158,13 @@ class AppDatabase {
   factory AppDatabase.memory() => AppDatabase(sqlite3.openInMemory());
 
   void close() => db.close();
+
+  /// One-time migration for the record_reccomend -> Cairn rename: copies an
+  /// existing legacy database file forward so local ratings aren't lost.
+  static void migrateLegacyFile(String legacyPath, String newPath) {
+    final legacy = File(legacyPath);
+    if (legacy.existsSync() && !File(newPath).existsSync()) {
+      legacy.copySync(newPath);
+    }
+  }
 }

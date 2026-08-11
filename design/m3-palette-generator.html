@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Material 3 palette generator — Cairn</title>
+  <style>
+    :root {
+      --bg: #131316; --panel: #1d1d21; --ink: #f2eff4; --dim: #a8a3ae;
+      --border: #333038; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 2rem; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+    main { max-width: 72rem; margin: auto; }
+    h1 { margin-top: 0; font-size: 1.4rem; }
+    p.intro { color: var(--dim); max-width: 48rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: end; margin: 1.5rem 0; padding: 1rem 1.25rem; background: var(--panel); border-radius: .75rem; border: 1px solid var(--border); }
+    .field { display: grid; gap: .35rem; }
+    .field span { color: var(--dim); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+    input[type="text"] { font: 1rem var(--mono); padding: .5rem .65rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--bg); color: var(--ink); width: 9rem; }
+    input[type="color"] { width: 3rem; height: 2.6rem; padding: 0; border: 0; border-radius: .5rem; background: transparent; }
+    select, input[type="number"] { font: 1rem system-ui, sans-serif; padding: .5rem .6rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--bg); color: var(--ink); }
+    .swatch-color-row { display: flex; gap: .5rem; align-items: center; }
+    .status { font: .85rem var(--mono); color: var(--dim); min-height: 1.2em; }
+    .status.error { color: #ff8a80; }
+    h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin: 2rem 0 .75rem; }
+    .schemes { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 900px) { .schemes { grid-template-columns: 1fr; } }
+    .scheme-card { background: var(--panel); border: 1px solid var(--border); border-radius: .75rem; padding: 1rem 1.25rem 1.25rem; }
+    .scheme-card h3 { margin: 0 0 .75rem; font-size: .95rem; color: var(--dim); font-weight: 600; }
+    .role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .6rem; }
+    .role { border-radius: .5rem; overflow: hidden; border: 1px solid var(--border); }
+    .role .swatch { height: 2.6rem; display: flex; align-items: center; justify-content: center; font: .78rem var(--mono); }
+    .role .meta { padding: .35rem .5rem; background: var(--bg); font-size: .72rem; }
+    .role .meta .name { color: var(--ink); display: block; }
+    .role .meta .hex { color: var(--dim); font: .72rem var(--mono); }
+    .tonal-palettes { margin-top: 1.5rem; }
+    .tonal-row { display: grid; grid-template-columns: 6rem repeat(13, 1fr); gap: 2px; align-items: center; margin-bottom: 2px; }
+    .tonal-row .label { font-size: .75rem; color: var(--dim); }
+    .tonal-cell { height: 2.4rem; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 2px; font: .62rem var(--mono); border-radius: 2px; }
+    .tonal-header { display: grid; grid-template-columns: 6rem repeat(13, 1fr); gap: 2px; margin-bottom: 4px; }
+    .tonal-header span { text-align: center; font-size: .68rem; color: var(--dim); }
+    footer { margin-top: 2.5rem; color: var(--dim); font-size: .82rem; max-width: 48rem; }
+    footer code { font: .82rem var(--mono); color: var(--ink); }
+    a { color: #b9a6ff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Material 3 palette generator</h1>
+    <p class="intro">
+      Input one seed color, get the exact <code>ColorScheme</code> Flutter's
+      <code>ColorScheme.fromSeed()</code> would produce from it — computed with Google's
+      real Material Color Utilities library (HCT color space), not an approximation.
+      Cairn's own theme (<code>lib/main.dart</code>) uses the
+      <strong>Expressive</strong> variant, selected by default below.
+    </p>
+
+    <div class="controls">
+      <div class="field">
+        <span>Seed color</span>
+        <div class="swatch-color-row">
+          <input id="hex" type="text" value="#6750a4" spellcheck="false">
+          <input id="picker" type="color" value="#6750a4">
+        </div>
+      </div>
+      <div class="field">
+        <span>Scheme variant</span>
+        <select id="variant">
+          <option value="expressive" selected>Expressive (Cairn's variant)</option>
+          <option value="tonalSpot">Tonal Spot (Material default)</option>
+          <option value="vibrant">Vibrant</option>
+          <option value="neutral">Neutral</option>
+          <option value="monochrome">Monochrome</option>
+          <option value="fidelity">Fidelity</option>
+          <option value="content">Content</option>
+          <option value="rainbow">Rainbow</option>
+          <option value="fruitSalad">Fruit Salad</option>
+        </select>
+      </div>
+      <div class="field">
+        <span>Contrast level</span>
+        <input id="contrast" type="number" value="0" min="-1" max="1" step="0.1">
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="schemes">
+      <div class="scheme-card">
+        <h3>Light scheme</h3>
+        <div class="role-grid" id="light-roles"></div>
+      </div>
+      <div class="scheme-card">
+        <h3>Dark scheme</h3>
+        <div class="role-grid" id="dark-roles"></div>
+      </div>
+    </div>
+
+    <div class="tonal-palettes">
+      <h2>Raw tonal palettes</h2>
+      <div id="tonal-header-row"></div>
+      <div id="tonal-rows"></div>
+    </div>
+
+    <footer>
+      Uses <a href="https://www.npmjs.com/package/@material/material-color-utilities" target="_blank" rel="noopener">@material/material-color-utilities</a>
+      v0.4.0 loaded from jsDelivr's ESM CDN (<code>cdn.jsdelivr.net</code>) — this file needs
+      internet access to work, and is a design-time tool, not something bundled into the app.
+      Role/tone math matches Flutter's <code>dynamic_color</code>/Material 3 implementation exactly,
+      since both are built on the same upstream library.
+    </footer>
+  </main>
+
+  <script type="module">
+    const statusEl = document.getElementById('status');
+    statusEl.textContent = 'Loading Material Color Utilities from cdn.jsdelivr.net…';
+
+    let mcu;
+    try {
+      // Dynamic import() (not a static `import` declaration) so a network/CORS/
+      // ad-blocker failure throws a catchable error instead of silently killing
+      // the whole module with nothing but an invisible browser-console error.
+      mcu = await import('https://cdn.jsdelivr.net/npm/@material/material-color-utilities@0.4.0/+esm');
+    } catch (err) {
+      statusEl.classList.add('error');
+      statusEl.textContent =
+        'Could not load the color library from cdn.jsdelivr.net (' + err.message + '). ' +
+        'This page needs internet access to cdn.jsdelivr.net — check your connection, ' +
+        'an ad-blocker/extension, or a network policy blocking that domain, then reload.';
+      throw err;
+    }
+
+    const {
+      Hct, argbFromHex, hexFromArgb, MaterialDynamicColors,
+      SchemeExpressive, SchemeTonalSpot, SchemeVibrant, SchemeNeutral,
+      SchemeMonochrome, SchemeFidelity, SchemeContent, SchemeRainbow, SchemeFruitSalad,
+      TonalPalette,
+    } = mcu;
+
+    const SCHEME_CLASSES = {
+      expressive: SchemeExpressive, tonalSpot: SchemeTonalSpot, vibrant: SchemeVibrant,
+      neutral: SchemeNeutral, monochrome: SchemeMonochrome, fidelity: SchemeFidelity,
+      content: SchemeContent, rainbow: SchemeRainbow, fruitSalad: SchemeFruitSalad,
+    };
+
+    // Every role Flutter's ColorScheme exposes, grouped for a readable grid.
+    const ROLES = [
+      'primary', 'onPrimary', 'primaryContainer', 'onPrimaryContainer', 'inversePrimary',
+      'secondary', 'onSecondary', 'secondaryContainer', 'onSecondaryContainer',
+      'tertiary', 'onTertiary', 'tertiaryContainer', 'onTertiaryContainer',
+      'error', 'onError', 'errorContainer', 'onErrorContainer',
+      'surface', 'onSurface', 'onSurfaceVariant', 'inverseSurface', 'inverseOnSurface',
+      'surfaceDim', 'surfaceBright',
+      'surfaceContainerLowest', 'surfaceContainerLow', 'surfaceContainer',
+      'surfaceContainerHigh', 'surfaceContainerHighest',
+      'outline', 'outlineVariant', 'shadow', 'scrim',
+    ];
+
+    const TONE_STOPS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99, 100];
+    const PALETTE_KEYS = [
+      ['primaryPalette', 'Primary'], ['secondaryPalette', 'Secondary'],
+      ['tertiaryPalette', 'Tertiary'], ['neutralPalette', 'Neutral'],
+      ['neutralVariantPalette', 'Neutral variant'],
+    ];
+
+    const hexInput = document.getElementById('hex');
+    const pickerInput = document.getElementById('picker');
+    const variantSelect = document.getElementById('variant');
+    const contrastInput = document.getElementById('contrast');
+    const lightRolesEl = document.getElementById('light-roles');
+    const darkRolesEl = document.getElementById('dark-roles');
+    const tonalHeaderEl = document.getElementById('tonal-header-row');
+    const tonalRowsEl = document.getElementById('tonal-rows');
+
+    function readableTextColor(hex) {
+      const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+      const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      return luminance > 0.55 ? '#000000' : '#ffffff';
+    }
+
+    function renderRoles(container, scheme) {
+      container.innerHTML = '';
+      for (const role of ROLES) {
+        const dynamicColor = MaterialDynamicColors[role];
+        if (!dynamicColor) continue;
+        const hex = hexFromArgb(dynamicColor.getArgb(scheme));
+        const cell = document.createElement('div');
+        cell.className = 'role';
+        cell.innerHTML = `
+          <div class="swatch" style="background:${hex};color:${readableTextColor(hex)}">${hex}</div>
+          <div class="meta"><span class="name">${role}</span></div>`;
+        container.appendChild(cell);
+      }
+    }
+
+    function renderTonalPalettes(scheme) {
+      tonalHeaderEl.innerHTML = '';
+      const header = document.createElement('div');
+      header.className = 'tonal-header';
+      header.innerHTML = '<span></span>' + TONE_STOPS.map((t) => `<span>${t}</span>`).join('');
+      tonalHeaderEl.appendChild(header);
+
+      tonalRowsEl.innerHTML = '';
+      for (const [key, label] of PALETTE_KEYS) {
+        const palette = scheme[key];
+        const row = document.createElement('div');
+        row.className = 'tonal-row';
+        const cells = TONE_STOPS.map((tone) => {
+          const hex = hexFromArgb(palette.tone(tone));
+          return `<div class="tonal-cell" style="background:${hex};color:${readableTextColor(hex)}">${tone}</div>`;
+        }).join('');
+        row.innerHTML = `<span class="label">${label}</span>${cells}`;
+        tonalRowsEl.appendChild(row);
+      }
+    }
+
+    function regenerate() {
+      const hex = hexInput.value.trim();
+      if (!/^#[0-9a-f]{6}$/i.test(hex)) {
+        statusEl.textContent = 'Enter a 6-digit hex color, e.g. #6750a4.';
+        statusEl.classList.add('error');
+        return;
+      }
+      try {
+        statusEl.classList.remove('error');
+        pickerInput.value = hex;
+
+        const contrastLevel = Math.min(1, Math.max(-1, Number(contrastInput.value) || 0));
+        const SchemeClass = SCHEME_CLASSES[variantSelect.value] || SchemeExpressive;
+        const seedHct = Hct.fromInt(argbFromHex(hex));
+
+        const light = new SchemeClass(seedHct, false, contrastLevel);
+        const dark = new SchemeClass(seedHct, true, contrastLevel);
+
+        renderRoles(lightRolesEl, light);
+        renderRoles(darkRolesEl, dark);
+        renderTonalPalettes(light);
+
+        statusEl.textContent = `Seed HCT — hue ${seedHct.hue.toFixed(1)}°, chroma ${seedHct.chroma.toFixed(1)}, tone ${seedHct.tone.toFixed(1)}`;
+      } catch (err) {
+        statusEl.classList.add('error');
+        statusEl.textContent = 'Render error: ' + err.message + ' (see browser console for details).';
+        console.error(err);
+      }
+    }
+
+    hexInput.addEventListener('input', regenerate);
+    pickerInput.addEventListener('input', () => { hexInput.value = pickerInput.value; regenerate(); });
+    variantSelect.addEventListener('change', regenerate);
+    contrastInput.addEventListener('input', regenerate);
+
+    regenerate();
+  </script>
+</body>
+</html>

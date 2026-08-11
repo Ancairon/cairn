@@ -5,8 +5,13 @@ plugins {
 }
 
 android {
-    namespace = "com.recordreccomend.record_reccomend"
-    compileSdk = flutter.compileSdkVersion
+    namespace = "com.ancairon.cairn"
+    // Overridden above flutter.compileSdkVersion (34 on the currently
+    // installed Flutter 3.44.9): file_picker's transitive dependency on
+    // flutter_plugin_android_lifecycle requires compiling against API 36+.
+    // targetSdk/minSdk stay Flutter-driven; only the compile-time API level
+    // needs bumping here.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -16,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.recordreccomend.record_reccomend"
+        applicationId = "com.ancairon.cairn"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

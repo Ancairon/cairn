@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 // MusicBrainz's usage policy asks for a descriptive User-Agent with contact
 // info. Update this once the project has a public repo URL or contact email.
-const userAgent = 'record_reccomend/0.1.0 (local development build)';
+const userAgent = 'cairn/0.1.0 (local development build)';
 
 class HttpException implements Exception {
   final String message;

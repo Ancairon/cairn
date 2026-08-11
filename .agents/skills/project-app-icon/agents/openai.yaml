@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project App Icon"
+  short_description: "Design and ship the vinyl app icon"
+  default_prompt: "Use $project-app-icon to design, validate, and integrate a vinyl-based Android app icon."

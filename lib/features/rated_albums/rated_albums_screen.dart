@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../../core/network/artwork_cache.dart';
+import '../../data/remote/coverart_client.dart';
 import '../../data/models/album.dart';
 import '../../data/models/rating.dart';
 import '../../data/models/saved_filter.dart';
 import '../../data/repositories/album_repository.dart';
 import '../../data/repositories/rating_repository.dart';
 import '../../data/repositories/saved_filter_repository.dart';
+import '../../data/repositories/settings_repository.dart';
 
 /// Client-side sort applied to the already-fetched rows — no need to push
 /// this into SQL, `ratedAlbumsMatching()` already returns everything a sort
@@ -19,12 +23,16 @@ class RatedAlbumsPage extends StatefulWidget {
   final RatingRepository ratingRepository;
   final AlbumRepository albumRepository;
   final SavedFilterRepository savedFilterRepository;
+  final SettingsRepository settings;
+  final Future<void> Function(String albumMbid) onAlbumTap;
 
   const RatedAlbumsPage({
     super.key,
     required this.ratingRepository,
     required this.albumRepository,
     required this.savedFilterRepository,
+    required this.settings,
+    required this.onAlbumTap,
   });
 
   @override
@@ -37,31 +45,124 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
   SavedFilter? _selectedFilter;
   List<(Album, Rating)> _rows = [];
   _SortOption _sortOption = _SortOption.newest;
+  bool _gridView = false;
+  bool _compactGrid = true;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String? _selectedGenre;
+  List<String> _availableGenres = [];
+  Map<String, int> _genreCounts = {};
+  int _totalRatedCount = 0;
 
   @override
   void initState() {
     super.initState();
+    _restorePreferences();
     _savedFilters = widget.savedFilterRepository.all();
+    widget.ratingRepository.addListener(_onRatingsChanged);
     _fetchRows();
+  }
+
+  @override
+  void dispose() {
+    widget.ratingRepository.removeListener(_onRatingsChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onRatingsChanged() {
+    if (!mounted) return;
+    setState(_fetchRows);
+  }
+
+  void _restorePreferences() {
+    _sortOption = switch (widget.settings.ratedAlbumsSort()) {
+      'artist' => _SortOption.artistAsc,
+      'album' => _SortOption.albumAsc,
+      _ => _SortOption.newest,
+    };
+    _gridView = widget.settings.ratedAlbumsView() == 'grid';
+    _compactGrid = widget.settings.ratedAlbumsSize() != 'large';
   }
 
   /// Re-fetches rows for the current filter, then re-applies the current
   /// sort. Called after any change that could affect either — filter
   /// selection, sort selection, or a row edit/removal.
   void _fetchRows() {
-    _rows = widget.ratingRepository.ratedAlbumsMatching(_selectedFilter?.criteria);
+    final query = _searchQuery.trim().toLowerCase();
+    final baseRows =
+        widget.ratingRepository.ratedAlbumsMatching(_selectedFilter?.criteria);
+    _totalRatedCount = widget.ratingRepository.ratedAlbumsMatching().length;
+    _genreCounts = {};
+    for (final row in baseRows) {
+      for (final rawGenre in row.$1.genres) {
+        final genre = rawGenre.trim();
+        if (genre.isEmpty) continue;
+        _genreCounts[genre] = (_genreCounts[genre] ?? 0) + 1;
+      }
+    }
+    _availableGenres = _genreCounts.keys.toList()..sort(_compareText);
+    _rows = baseRows
+        .where((row) => _matchesSearch(row.$1, query) && _matchesGenre(row.$1))
+        .toList();
     _sortRows();
+  }
+
+  bool _matchesGenre(Album album) {
+    final genre = _selectedGenre?.toLowerCase();
+    if (genre == null) return true;
+    return album.genres.any((item) => item.toLowerCase() == genre);
+  }
+
+  bool _matchesSearch(Album album, String query) {
+    if (query.isEmpty) return true;
+    final haystack = '${album.title} ${album.artistName}'.toLowerCase();
+    return query.split(RegExp(r'\s+')).every(haystack.contains);
+  }
+
+  void _setSearchQuery(String value) {
+    setState(() {
+      _searchQuery = value;
+      _fetchRows();
+    });
   }
 
   void _sortRows() {
     switch (_sortOption) {
       case _SortOption.newest:
-        _rows.sort((a, b) => b.$2.ratedAt.compareTo(a.$2.ratedAt));
+        _rows.sort((a, b) {
+          final byDate = b.$2.ratedAt.compareTo(a.$2.ratedAt);
+          if (byDate != 0) return byDate;
+          return _compareAlbums(a.$1, b.$1);
+        });
       case _SortOption.artistAsc:
-        _rows.sort((a, b) => a.$1.artistName.compareTo(b.$1.artistName));
+        _rows.sort((a, b) {
+          final byArtist = _compareText(a.$1.artistName, b.$1.artistName);
+          if (byArtist != 0) return byArtist;
+          // Keep albums by the same artist together and alphabetize within
+          // that group instead of preserving the previous fetch order.
+          return _compareAlbums(a.$1, b.$1);
+        });
       case _SortOption.albumAsc:
-        _rows.sort((a, b) => a.$1.title.compareTo(b.$1.title));
+        _rows.sort((a, b) {
+          final byAlbum = _compareText(a.$1.title, b.$1.title);
+          if (byAlbum != 0) return byAlbum;
+          return _compareAlbums(a.$1, b.$1);
+        });
     }
+  }
+
+  int _compareAlbums(Album a, Album b) {
+    final byTitle = _compareText(a.title, b.title);
+    if (byTitle != 0) return byTitle;
+    final byArtist = _compareText(a.artistName, b.artistName);
+    if (byArtist != 0) return byArtist;
+    return a.mbid.compareTo(b.mbid);
+  }
+
+  int _compareText(String a, String b) {
+    final byFoldedText = a.toLowerCase().compareTo(b.toLowerCase());
+    return byFoldedText != 0 ? byFoldedText : a.compareTo(b);
   }
 
   void _selectFilter(SavedFilter? filter) {
@@ -71,11 +172,47 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
     });
   }
 
+  void _selectGenre(String genre) {
+    setState(() {
+      _selectedGenre = genre.isEmpty ? null : genre;
+      _fetchRows();
+    });
+  }
+
   void _setSort(_SortOption option) {
     setState(() {
       _sortOption = option;
       _sortRows();
     });
+    widget.settings.setRatedAlbumsSort(switch (option) {
+      _SortOption.artistAsc => 'artist',
+      _SortOption.albumAsc => 'album',
+      _SortOption.newest => 'newest',
+    });
+  }
+
+  void _toggleView() {
+    setState(() => _gridView = !_gridView);
+    widget.settings.setRatedAlbumsView(_gridView ? 'grid' : 'list');
+  }
+
+  void _toggleSize() {
+    setState(() => _compactGrid = !_compactGrid);
+    widget.settings.setRatedAlbumsSize(_compactGrid ? 'compact' : 'large');
+  }
+
+  void _toggleGridOwnership(int index, {required bool cd}) {
+    final (album, rating) = _rows[index];
+    final updated = album.copyWith(
+      ownsCd: cd ? !album.ownsCd : album.ownsCd,
+      ownsVinyl: cd ? album.ownsVinyl : !album.ownsVinyl,
+    );
+    widget.albumRepository.setOwnership(
+      album.mbid,
+      ownsCd: cd ? updated.ownsCd : null,
+      ownsVinyl: cd ? null : updated.ownsVinyl,
+    );
+    setState(() => _rows[index] = (updated, rating));
   }
 
   Future<void> _addFilter() async {
@@ -102,8 +239,12 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
         title: const Text('Delete filter?'),
         content: Text('Delete "${filter.name}"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete')),
         ],
       ),
     );
@@ -149,35 +290,94 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 16, 0),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Column(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                  Expanded(
-                    child: Text('Rated albums', style: Theme.of(context).textTheme.titleLarge),
-                  ),
-                  PopupMenuButton<_SortOption>(
-                    icon: const Icon(Icons.sort),
-                    tooltip: 'Sort',
-                    initialValue: _sortOption,
-                    onSelected: _setSort,
-                    itemBuilder: (context) => const [
-                      PopupMenuItem(value: _SortOption.newest, child: Text('Newest rated')),
-                      PopupMenuItem(value: _SortOption.artistAsc, child: Text('Artist (A-Z)')),
-                      PopupMenuItem(value: _SortOption.albumAsc, child: Text('Album (A-Z)')),
+                  Text('Rated albums · ${_rows.length}/$_totalRatedCount',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleLarge),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 4,
+                    runSpacing: 2,
+                    children: [
+                      PopupMenuButton<_SortOption>(
+                        tooltip: 'Sort',
+                        initialValue: _sortOption,
+                        onSelected: _setSort,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.sort),
+                              SizedBox(width: 4),
+                              Text('Sort'),
+                            ],
+                          ),
+                        ),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                              value: _SortOption.newest,
+                              child: Text('Newest rated')),
+                          PopupMenuItem(
+                              value: _SortOption.artistAsc,
+                              child: Text('Artist (A-Z)')),
+                          PopupMenuItem(
+                              value: _SortOption.albumAsc,
+                              child: Text('Album (A-Z)')),
+                        ],
+                      ),
+                      TextButton.icon(
+                        icon:
+                            Icon(_gridView ? Icons.view_list : Icons.grid_view),
+                        label: Text(_gridView ? 'List' : 'Grid'),
+                        onPressed: _toggleView,
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.photo_size_select_large),
+                        label: Text(_compactGrid ? 'Compact' : 'Large'),
+                        onPressed: _toggleSize,
+                      ),
                     ],
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 8),
+            _searchBar(context),
             _filterBar(context),
             const Divider(height: 1),
             Expanded(child: _list(context)),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _searchBar(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: TextField(
+        controller: _searchController,
+        onChanged: _setSearchQuery,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: 'Search rated albums',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _searchQuery.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Clear search',
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _searchController.clear();
+                    _setSearchQuery('');
+                  },
+                ),
+          border: const OutlineInputBorder(),
+          isDense: true,
         ),
       ),
     );
@@ -222,6 +422,21 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
             tooltip: 'New saved filter',
             onPressed: _addFilter,
           ),
+          PopupMenuButton<String>(
+            tooltip: 'Genre filter',
+            onSelected: _selectGenre,
+            itemBuilder: (context) => [
+              const PopupMenuItem<String>(value: '', child: Text('All genres')),
+              ..._availableGenres.map((genre) => PopupMenuItem<String>(
+                    value: genre,
+                    child: Text('$genre (${_genreCounts[genre]})'),
+                  )),
+            ],
+            child: Chip(
+              avatar: const Icon(Icons.local_offer_outlined, size: 18),
+              label: Text(_selectedGenre ?? 'Genre'),
+            ),
+          ),
         ],
       ),
     );
@@ -236,12 +451,14 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
         ),
       );
     }
+    if (_gridView) return _grid(context);
     return ListView.separated(
       padding: const EdgeInsets.only(top: 4, bottom: 16),
       itemCount: _rows.length,
       separatorBuilder: (context, index) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final (album, rating) = _rows[index];
+        final artworkSize = _compactGrid ? 56.0 : 88.0;
         // `confirmDismiss` always returns false below — the swipe itself
         // never removes the row from the list. It's only used as the
         // trigger gesture for a small "which action?" prompt; the actual
@@ -252,20 +469,111 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
           background: _swipeActionsPreview(context),
           confirmDismiss: (_) => _confirmRowAction(album, rating),
           child: ListTile(
-            title: Text(
-              album.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            leading: _albumArtwork(context, album, size: artworkSize),
+            onTap: () => _openAlbum(album),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(album.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(album.artistName,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                _ownershipRatingRow(context, album, rating, index),
+              ],
             ),
-            subtitle: Text(
-              '${album.artistName} · ${album.firstReleaseYear ?? 'unknown year'}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: _ratingTrailing(context, album, rating),
           ),
         );
       },
+    );
+  }
+
+  Widget _grid(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: _compactGrid ? 150 : 240,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        // Reserve enough height for a square artwork tile plus its metadata.
+        // The artwork itself stays 1:1 in both size modes.
+        childAspectRatio: _compactGrid ? .64 : .70,
+      ),
+      itemCount: _rows.length,
+      itemBuilder: (context, index) {
+        final (album, rating) = _rows[index];
+        return Card(
+          color: colors.primaryContainer,
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () => _openAlbum(album),
+            onLongPress: () => _confirmRowAction(album, rating),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: _albumArtwork(context, album),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 2, 8, 0),
+                  child: Text(album.title,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                  child: Text(album.artistName,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 2),
+                  child: _ownershipRatingRow(context, album, rating, index),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openAlbum(Album album) async {
+    Navigator.of(context).pop();
+    await widget.onAlbumTap(album.mbid);
+  }
+
+  Widget _albumArtwork(BuildContext context, Album album, {double? size}) {
+    final placeholder = _artworkPlaceholder(context, album, size: size);
+    final image = album.coverArtUrl;
+    final thumbnail = image == null
+        ? CoverArtClient.releaseGroupThumbnailUrl(album.mbid, size: 250)
+        : _smallArtworkUrl(image);
+    final child = CachedNetworkImage(
+      imageUrl: thumbnail,
+      cacheManager: ArtworkCache.manager,
+      fit: BoxFit.cover,
+      placeholder: (context, url) => placeholder,
+      errorWidget: (context, url, error) => placeholder,
+    );
+    return size == null
+        ? AspectRatio(aspectRatio: 1, child: child)
+        : SizedBox(width: size, height: size, child: child);
+  }
+
+  String _smallArtworkUrl(String url) =>
+      url.replaceFirst('front-500', 'front-250');
+
+  Widget _artworkPlaceholder(BuildContext context, Album album,
+      {double? size}) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      width: size,
+      height: size,
+      color: colors.secondaryContainer,
+      alignment: Alignment.center,
+      child: Icon(Icons.album,
+          size: size == null ? 48 : size * .42,
+          color: colors.onSecondaryContainer),
     );
   }
 
@@ -319,10 +627,15 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Remove rating?'),
-        content: Text('Remove your rating for "${album.title}"? This cannot be undone.'),
+        content: Text(
+            'Remove your rating for "${album.title}"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Remove')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Remove')),
         ],
       ),
     );
@@ -338,36 +651,55 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
     );
     if (result == null) return;
     final (ownsCd, ownsVinyl, stars) = result;
-    widget.albumRepository.setOwnership(album.mbid, ownsCd: ownsCd, ownsVinyl: ownsVinyl);
+    widget.albumRepository
+        .setOwnership(album.mbid, ownsCd: ownsCd, ownsVinyl: ownsVinyl);
     widget.ratingRepository.rate(album.mbid, stars);
     setState(_fetchRows);
   }
 
-  Widget _ratingTrailing(BuildContext context, Album album, Rating rating) {
-    final colors = Theme.of(context).colorScheme;
+  Widget _ownershipRatingRow(
+      BuildContext context, Album album, Rating rating, int index) {
+    final primary = Theme.of(context).colorScheme.primary;
     return Row(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: MainAxisSize.max,
       children: [
-        if (album.ownsCd) Icon(Icons.album, size: 16, color: colors.onSurfaceVariant),
-        if (album.ownsVinyl)
-          Padding(
-            padding: const EdgeInsets.only(left: 2),
-            child: Icon(Icons.album_outlined, size: 16, color: colors.onSurfaceVariant),
+        if (album.ownsCd)
+          SizedBox(
+            width: 28,
+            height: 28,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              tooltip: 'CD',
+              iconSize: 18,
+              color: primary,
+              icon: const Icon(Icons.album),
+              onPressed: () => _toggleGridOwnership(index, cd: true),
+            ),
           ),
-        Padding(
-          padding: const EdgeInsets.only(left: 6),
-          child: Text(_starsText(rating.stars)),
-        ),
+        if (album.ownsVinyl)
+          SizedBox(
+            width: 28,
+            height: 28,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              tooltip: 'Vinyl',
+              iconSize: 18,
+              color: primary,
+              icon: const Icon(Icons.album_outlined),
+              onPressed: () => _toggleGridOwnership(index, cd: false),
+            ),
+          ),
+        const Spacer(),
+        Text('${rating.stars}/5'),
       ],
     );
   }
-
-  String _starsText(int stars) => '★' * stars + '☆' * (5 - stars);
 }
 
 /// Shows the create/edit form for a saved filter. Returns (name, criteria)
 /// on save, or null if the dialog was dismissed without saving.
-Future<(String, FilterCriteria)?> _showSavedFilterForm(BuildContext context, {SavedFilter? existing}) {
+Future<(String, FilterCriteria)?> _showSavedFilterForm(BuildContext context,
+    {SavedFilter? existing}) {
   return showDialog<(String, FilterCriteria)>(
     context: context,
     builder: (context) => _SavedFilterFormDialog(existing: existing),
@@ -418,14 +750,16 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
     if (name.isEmpty) return;
     Navigator.of(context).pop((
       name,
-      FilterCriteria(ownership: _ownership, minRating: _minRating, maxRating: _maxRating),
+      FilterCriteria(
+          ownership: _ownership, minRating: _minRating, maxRating: _maxRating),
     ));
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.existing == null ? 'New saved filter' : 'Edit saved filter'),
+      title: Text(
+          widget.existing == null ? 'New saved filter' : 'Edit saved filter'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -441,7 +775,8 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
               initialValue: _ownership,
               decoration: const InputDecoration(labelText: 'Ownership'),
               items: _ownershipLabels.entries
-                  .map((entry) => DropdownMenuItem(value: entry.key, child: Text(entry.value)))
+                  .map((entry) => DropdownMenuItem(
+                      value: entry.key, child: Text(entry.value)))
                   .toList(),
               onChanged: (value) => setState(() => _ownership = value),
             ),
@@ -450,7 +785,9 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
               initialValue: _minRating,
               decoration: const InputDecoration(labelText: 'Minimum rating'),
               items: [null, 1, 2, 3, 4, 5]
-                  .map((value) => DropdownMenuItem(value: value, child: Text(value == null ? 'Any' : '$value stars')))
+                  .map((value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(value == null ? 'Any' : '$value/5')))
                   .toList(),
               onChanged: (value) => setState(() => _minRating = value),
             ),
@@ -459,7 +796,9 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
               initialValue: _maxRating,
               decoration: const InputDecoration(labelText: 'Maximum rating'),
               items: [null, 1, 2, 3, 4, 5]
-                  .map((value) => DropdownMenuItem(value: value, child: Text(value == null ? 'Any' : '$value stars')))
+                  .map((value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(value == null ? 'Any' : '$value/5')))
                   .toList(),
               onChanged: (value) => setState(() => _maxRating = value),
             ),
@@ -467,7 +806,9 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
         FilledButton(onPressed: _save, child: const Text('Save')),
       ],
     );
@@ -526,7 +867,7 @@ class _EditRatingDialogState extends State<_EditRatingDialog> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Rating: ${_stars.round()} star${_stars.round() == 1 ? '' : 's'}',
+              'Rating: ${_stars.round()}/5',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleSmall,
             ),
@@ -548,9 +889,12 @@ class _EditRatingDialogState extends State<_EditRatingDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop((_ownsCd, _ownsVinyl, _stars.round())),
+          onPressed: () =>
+              Navigator.of(context).pop((_ownsCd, _ownsVinyl, _stars.round())),
           child: const Text('Save'),
         ),
       ],

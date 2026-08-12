@@ -44,6 +44,7 @@ Locked-in architecture decisions:
 - Every implementation fix must increment the alpha patch version and Android build number in `pubspec.yaml` before building an APK.
 - Keep the app below `1.0.0` while it is alpha; use the next `0.x.(patch)+build` version for each fix.
 - Tell the user the exact version installed with each checkpoint.
+- The patch number is reset (not incremented) exactly once, deliberately, at the first public release after a batch of dev-session fixes (e.g. `0.1.85` → `0.1.1` for the `v0.1.1` release) — a lower patch number appearing right after a much higher one in git history is this reset, not a mistake. The Android build number (the `+N` suffix) is never reset — it keeps incrementing monotonically across this and every future release/fix, since Android requires that for in-place upgrades to install without uninstalling.
 
 ### Device inspection rule
 

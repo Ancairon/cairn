@@ -3,7 +3,7 @@ description: >
   Album-first music discovery — local-first, no login, no API keys.
   Terminal app first (Milestone 1); Flutter mobile UI comes later on the same data layer.
 publish_to: 'none'
-version: 0.1.1+87
+version: 0.1.2+88
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

@@ -53,7 +53,7 @@ adb uninstall com.ancairon.cairn
 adb install -r <path-to-apk>
 ```
 
-This is acceptable **only** because the project is pre-release and there's no real user data to protect — losing on-device app data this way is a non-issue right now. Don't reach for this reflexively once the app has real users/data; at that point a signature mismatch needs a real signing-config fix instead (a currently-deferred decision — see `android/app/build.gradle.kts`'s `TODO` comments about the release signing config still using the debug keystore).
+This is acceptable **only** because the project is pre-release and there's no real user data to protect — losing on-device app data this way is a non-issue right now. This paragraph is specifically about *debug* builds — `flutter build apk --debug` still signs with Flutter's own auto-generated debug keystore, unaffected by the below. **Release builds no longer have this problem** (SOW-0014): `android/app/build.gradle.kts` now signs `release` builds with a real keystore (`android/key.properties` + the `.jks` it points at, both gitignored — never assume either exists on a fresh checkout, the build falls back to the debug keystore only when `key.properties` is genuinely absent). Losing that keystore or its password blocks seamless future updates for anyone already on a release signed with it; it is not tracked anywhere in this repo, and the user is responsible for backing it up outside this machine.
 
 ## Wireless ADB port rotation
 

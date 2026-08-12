@@ -99,6 +99,28 @@ const _schema = [
     ttl_seconds INTEGER NOT NULL
   )
   ''',
+  '''
+  CREATE TABLE IF NOT EXISTS album_notes (
+    album_mbid TEXT PRIMARY KEY REFERENCES albums(mbid),
+    note TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+  ''',
+  '''
+  CREATE TABLE IF NOT EXISTS track_notes (
+    album_mbid TEXT NOT NULL REFERENCES albums(mbid),
+    track_key TEXT NOT NULL,
+    note TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (album_mbid, track_key)
+  )
+  ''',
+  '''
+  CREATE TABLE IF NOT EXISTS recently_excluded_albums (
+    album_mbid TEXT PRIMARY KEY,
+    excluded_at INTEGER NOT NULL
+  )
+  ''',
 ];
 
 // CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists, so a
@@ -123,6 +145,8 @@ const _additiveColumns = {
     'backup_consent TEXT',
     'backup_folder_path TEXT',
     'last_backup_at INTEGER',
+    'last_update_check_at INTEGER',
+    'recent_recommended_artist_mbids TEXT',
   ],
 };
 
@@ -136,6 +160,7 @@ class AppDatabase {
       db.execute(statement);
     }
     _ensureAdditiveColumns();
+    _migrateStarsToThreeTierScale();
   }
 
   void _ensureAdditiveColumns() {
@@ -151,6 +176,16 @@ class AppDatabase {
         }
       }
     }
+  }
+
+  // The rating UI moved from a 1-5 slider to three buttons (dislike/like/
+  // love) writing only 2/4/5 — see architecture.md. Folds old 1 into 2 and
+  // old 3 (previously "neutral") into 4; 2/4/5 already map to themselves,
+  // so this is naturally idempotent and safe to run on every open, the same
+  // "no version-tracking needed" style as _ensureAdditiveColumns above.
+  void _migrateStarsToThreeTierScale() {
+    db.execute('UPDATE ratings SET stars = 2 WHERE stars = 1');
+    db.execute('UPDATE ratings SET stars = 4 WHERE stars = 3');
   }
 
   factory AppDatabase.open(String path) => AppDatabase(sqlite3.open(path));

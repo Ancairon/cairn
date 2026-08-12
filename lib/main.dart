@@ -18,6 +18,8 @@ import 'data/repositories/deep_link_repository.dart';
 import 'data/repositories/saved_filter_repository.dart';
 import 'data/repositories/settings_repository.dart';
 import 'data/repositories/backup_repository.dart';
+import 'data/repositories/notes_repository.dart';
+import 'data/repositories/update_check_repository.dart';
 import 'features/discovery/discovery_controller.dart';
 import 'features/discovery/discovery_screen.dart';
 
@@ -56,6 +58,8 @@ Future<void> main() async {
   final settings = SettingsRepository(database);
   final savedFilters = SavedFilterRepository(database);
   final backups = BackupRepository(database);
+  final notes = NotesRepository(database);
+  final updateCheck = UpdateCheckRepository(http);
 
   final controller = DiscoveryController(
     albums,
@@ -66,6 +70,8 @@ Future<void> main() async {
     settings,
     savedFilters,
     backups,
+    notes,
+    updateCheck,
   );
 
   runApp(CairnApp(controller: controller));

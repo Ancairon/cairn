@@ -9,6 +9,7 @@ import '../../data/repositories/album_repository.dart';
 import '../../data/repositories/rating_repository.dart';
 import '../../data/repositories/saved_filter_repository.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../data/repositories/notes_repository.dart';
 
 /// Client-side sort applied to the already-fetched rows — no need to push
 /// this into SQL, `ratedAlbumsMatching()` already returns everything a sort
@@ -24,6 +25,7 @@ class RatedAlbumsPage extends StatefulWidget {
   final AlbumRepository albumRepository;
   final SavedFilterRepository savedFilterRepository;
   final SettingsRepository settings;
+  final NotesRepository notes;
   final Future<void> Function(String albumMbid) onAlbumTap;
 
   const RatedAlbumsPage({
@@ -32,6 +34,7 @@ class RatedAlbumsPage extends StatefulWidget {
     required this.albumRepository,
     required this.savedFilterRepository,
     required this.settings,
+    required this.notes,
     required this.onAlbumTap,
   });
 
@@ -53,6 +56,7 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
   List<String> _availableGenres = [];
   Map<String, int> _genreCounts = {};
   int _totalRatedCount = 0;
+  Set<String> _albumsWithNotes = {};
 
   @override
   void initState() {
@@ -60,6 +64,7 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
     _restorePreferences();
     _savedFilters = widget.savedFilterRepository.all();
     widget.ratingRepository.addListener(_onRatingsChanged);
+    _albumsWithNotes = widget.notes.albumMbidsWithAnyNote();
     _fetchRows();
   }
 
@@ -139,8 +144,11 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
         _rows.sort((a, b) {
           final byArtist = _compareText(a.$1.artistName, b.$1.artistName);
           if (byArtist != 0) return byArtist;
-          // Keep albums by the same artist together and alphabetize within
-          // that group instead of preserving the previous fetch order.
+          // Within the same artist, chronological (oldest first) rather
+          // than alphabetical by title — matches how a discography is
+          // actually browsed, not a dictionary ordering of album names.
+          final byYear = _compareReleaseYear(a.$1, b.$1);
+          if (byYear != 0) return byYear;
           return _compareAlbums(a.$1, b.$1);
         });
       case _SortOption.albumAsc:
@@ -150,6 +158,17 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
           return _compareAlbums(a.$1, b.$1);
         });
     }
+  }
+
+  // Unknown release years sort last — safer than guessing they're either
+  // the oldest or newest in the group.
+  int _compareReleaseYear(Album a, Album b) {
+    final ay = a.firstReleaseYear;
+    final by = b.firstReleaseYear;
+    if (ay == null && by == null) return 0;
+    if (ay == null) return 1;
+    if (by == null) return -1;
+    return ay.compareTo(by);
   }
 
   int _compareAlbums(Album a, Album b) {
@@ -460,14 +479,19 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
         final (album, rating) = _rows[index];
         final artworkSize = _compactGrid ? 56.0 : 88.0;
         // `confirmDismiss` always returns false below — the swipe itself
-        // never removes the row from the list. It's only used as the
-        // trigger gesture for a small "which action?" prompt; the actual
-        // remove/edit is handled explicitly and refreshes `_rows` itself.
+        // never removes the row from the list. It's only the trigger
+        // gesture for the remove-rating confirmation; tapping the row is
+        // "edit" (loads the album onto the main card), so swipe unambiguously
+        // means remove. The actual removal is handled explicitly by
+        // `_removeRow` and refreshes `_rows` itself.
         return Dismissible(
           key: ValueKey(album.mbid),
           direction: DismissDirection.endToStart,
           background: _swipeActionsPreview(context),
-          confirmDismiss: (_) => _confirmRowAction(album, rating),
+          confirmDismiss: (_) async {
+            await _removeRow(album);
+            return false;
+          },
           child: ListTile(
             leading: _albumArtwork(context, album, size: artworkSize),
             onTap: () => _openAlbum(album),
@@ -507,7 +531,7 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: () => _openAlbum(album),
-            onLongPress: () => _confirmRowAction(album, rating),
+            onLongPress: () => _removeRow(album),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -537,8 +561,12 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
     );
   }
 
+  // Deliberately does not pop this page off the menu's nested Navigator —
+  // editing an album should return to exactly this journal list if the menu
+  // is swiped open again, not bump the user back to the menu root.
+  // onAlbumTap (_openRatedAlbum in discovery_screen.dart) already closes the
+  // card-over-menu overlay on its own; that's all that's needed here.
   Future<void> _openAlbum(Album album) async {
-    Navigator.of(context).pop();
     await widget.onAlbumTap(album.mbid);
   }
 
@@ -594,34 +622,11 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
     );
   }
 
-  /// Shown once a left-swipe passes Dismissible's own threshold. Same
-  /// SimpleDialog pattern as `_showFilterActions` above, just with
-  /// different labels/actions for a rated-album row.
-  Future<bool> _confirmRowAction(Album album, Rating rating) async {
-    final action = await showDialog<String>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: Text(album.title),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.of(context).pop('edit'),
-            child: const Text('Edit'),
-          ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.of(context).pop('remove'),
-            child: const Text('Remove rating'),
-          ),
-        ],
-      ),
-    );
-    if (action == 'edit') {
-      await _editRow(album, rating);
-    } else if (action == 'remove') {
-      await _removeRow(album);
-    }
-    return false;
-  }
-
+  // Tapping a row/card is "edit" — loads the album onto the main discovery
+  // card (_openAlbum), pre-filled with its existing rating/ownership (see
+  // discovery_screen.dart `_body`, which seeds the rating slider from the
+  // album's current rating whenever a new album arrives). Swipe (list) or
+  // long-press (grid) is unambiguously "remove" — no intermediate chooser.
   Future<void> _removeRow(Album album) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -644,56 +649,96 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
     setState(_fetchRows);
   }
 
-  Future<void> _editRow(Album album, Rating rating) async {
-    final result = await showDialog<(bool, bool, int)>(
-      context: context,
-      builder: (context) => _EditRatingDialog(album: album, rating: rating),
-    );
-    if (result == null) return;
-    final (ownsCd, ownsVinyl, stars) = result;
-    widget.albumRepository
-        .setOwnership(album.mbid, ownsCd: ownsCd, ownsVinyl: ownsVinyl);
-    widget.ratingRepository.rate(album.mbid, stars);
-    setState(_fetchRows);
-  }
-
+  // Each badge slot is always reserved at a fixed width, whether or not
+  // that album actually has it — otherwise rows with different combinations
+  // of CD/vinyl/comment badges shift the trailing rating text to different
+  // horizontal positions, visibly misaligned when rows sit side by side in
+  // grid view.
   Widget _ownershipRatingRow(
       BuildContext context, Album album, Rating rating, int index) {
     final primary = Theme.of(context).colorScheme.primary;
     return Row(
       mainAxisSize: MainAxisSize.max,
       children: [
-        if (album.ownsCd)
-          SizedBox(
-            width: 28,
-            height: 28,
-            child: IconButton(
-              padding: EdgeInsets.zero,
-              tooltip: 'CD',
-              iconSize: 18,
-              color: primary,
-              icon: const Icon(Icons.album),
-              onPressed: () => _toggleGridOwnership(index, cd: true),
-            ),
-          ),
-        if (album.ownsVinyl)
-          SizedBox(
-            width: 28,
-            height: 28,
-            child: IconButton(
-              padding: EdgeInsets.zero,
-              tooltip: 'Vinyl',
-              iconSize: 18,
-              color: primary,
-              icon: const Icon(Icons.album_outlined),
-              onPressed: () => _toggleGridOwnership(index, cd: false),
-            ),
-          ),
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: album.ownsVinyl
+              ? IconButton(
+                  padding: EdgeInsets.zero,
+                  alignment: Alignment.centerLeft,
+                  tooltip: 'Vinyl',
+                  iconSize: 18,
+                  color: primary,
+                  icon: const Icon(Icons.album_outlined),
+                  onPressed: () => _toggleGridOwnership(index, cd: false),
+                )
+              : null,
+        ),
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: album.ownsCd
+              ? IconButton(
+                  padding: EdgeInsets.zero,
+                  alignment: Alignment.centerLeft,
+                  tooltip: 'CD',
+                  iconSize: 18,
+                  color: primary,
+                  icon: const Icon(Icons.album),
+                  onPressed: () => _toggleGridOwnership(index, cd: true),
+                )
+              : null,
+        ),
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: _albumsWithNotes.contains(album.mbid)
+              ? Align(
+                  alignment: Alignment.centerLeft,
+                  child: Icon(Icons.sticky_note_2, size: 18, color: primary),
+                )
+              : null,
+        ),
         const Spacer(),
-        Text('${rating.stars}/5'),
+        Icon(_ratingTierIcon(ratingTierFor(rating.stars)), size: 18, color: primary),
       ],
     );
   }
+}
+
+/// Icon for a rating tier — see `RatingTier`/`ratingTierFor` in
+/// rating.dart. Shared by this row and the saved-filter form below.
+IconData _ratingTierIcon(RatingTier tier) => switch (tier) {
+      RatingTier.dislike => Icons.thumb_down,
+      RatingTier.like => Icons.thumb_up,
+      RatingTier.love => Icons.bolt,
+    };
+
+String _ratingTierLabel(RatingTier tier) => switch (tier) {
+      RatingTier.dislike => 'Dislike',
+      RatingTier.like => 'Like',
+      RatingTier.love => 'Love',
+    };
+
+/// 'Any' plus one entry per tier, using the tier's own stored value as the
+/// dropdown's underlying int — a min/max bound of e.g. `RatingTier.like.value`
+/// (4) filters `ratings.stars >= 4`, which correctly includes love (5) too.
+List<DropdownMenuItem<int?>> _ratingTierDropdownItems() {
+  return [
+    const DropdownMenuItem(value: null, child: Text('Any')),
+    ...RatingTier.values.map((tier) => DropdownMenuItem(
+          value: tier.value,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_ratingTierIcon(tier), size: 18),
+              const SizedBox(width: 8),
+              Text(_ratingTierLabel(tier)),
+            ],
+          ),
+        )),
+  ];
 }
 
 /// Shows the create/edit form for a saved filter. Returns (name, criteria)
@@ -784,22 +829,14 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
             DropdownButtonFormField<int?>(
               initialValue: _minRating,
               decoration: const InputDecoration(labelText: 'Minimum rating'),
-              items: [null, 1, 2, 3, 4, 5]
-                  .map((value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(value == null ? 'Any' : '$value/5')))
-                  .toList(),
+              items: _ratingTierDropdownItems(),
               onChanged: (value) => setState(() => _minRating = value),
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<int?>(
               initialValue: _maxRating,
               decoration: const InputDecoration(labelText: 'Maximum rating'),
-              items: [null, 1, 2, 3, 4, 5]
-                  .map((value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(value == null ? 'Any' : '$value/5')))
-                  .toList(),
+              items: _ratingTierDropdownItems(),
               onChanged: (value) => setState(() => _maxRating = value),
             ),
           ],
@@ -815,89 +852,3 @@ class _SavedFilterFormDialogState extends State<_SavedFilterFormDialog> {
   }
 }
 
-/// Compact edit form for a single rated-album row — ownership chips plus a
-/// 1-5 rating slider, same visual convention as the discovery screen's own
-/// ownership chips/rating slider. Returns (ownsCd, ownsVinyl, stars) on
-/// save, or null if dismissed without saving.
-class _EditRatingDialog extends StatefulWidget {
-  final Album album;
-  final Rating rating;
-
-  const _EditRatingDialog({required this.album, required this.rating});
-
-  @override
-  State<_EditRatingDialog> createState() => _EditRatingDialogState();
-}
-
-class _EditRatingDialogState extends State<_EditRatingDialog> {
-  late bool _ownsCd = widget.album.ownsCd;
-  late bool _ownsVinyl = widget.album.ownsVinyl;
-  late double _stars = widget.rating.stars.toDouble();
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(
-        widget.album.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              spacing: 8,
-              children: [
-                FilterChip(
-                  label: const Text('CD'),
-                  avatar: const Icon(Icons.album, size: 18),
-                  selected: _ownsCd,
-                  onSelected: (value) => setState(() => _ownsCd = value),
-                ),
-                FilterChip(
-                  label: const Text('Vinyl'),
-                  avatar: const Icon(Icons.album_outlined, size: 18),
-                  selected: _ownsVinyl,
-                  onSelected: (value) => setState(() => _ownsVinyl = value),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Rating: ${_stars.round()}/5',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 4,
-                overlayShape: SliderComponentShape.noOverlay,
-              ),
-              child: Slider(
-                value: _stars,
-                min: 1,
-                max: 5,
-                divisions: 4,
-                label: '${_stars.round()}',
-                onChanged: (value) => setState(() => _stars = value),
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
-        FilledButton(
-          onPressed: () =>
-              Navigator.of(context).pop((_ownsCd, _ownsVinyl, _stars.round())),
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}

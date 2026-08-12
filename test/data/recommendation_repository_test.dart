@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
@@ -116,8 +117,8 @@ void main() {
     });
   });
 
-  group('session display history', () {
-    test('excludes displayed albums for this session and resets on restart',
+  group('recently excluded (shown/skipped) history', () {
+    test('persists across a new repository instance instead of resetting on restart',
         () async {
       final db = AppDatabase.memory();
       final cache = ResponseCache(db);
@@ -154,11 +155,118 @@ void main() {
 
       expect((await repo.next()).mbid, 'fresh-mbid');
 
-      // The history is deliberately in memory, so a new repository/session
-      // can consider the same cached album again.
+      // SOW-0012: this history is now persisted (recently_excluded_albums),
+      // specifically so a new repository instance against the same DB — a
+      // real app restart — still excludes it, unlike the old in-memory-only
+      // behavior this replaced.
       final restarted = RecommendationRepository(
           db, musicBrainz, listenBrainz, albums, ratings);
-      expect((await restarted.next()).mbid, 'already-shown-mbid');
+      expect((await restarted.next()).mbid, 'fresh-mbid');
+      db.close();
+    });
+
+    test('expires once the exclusion window has passed', () async {
+      final db = AppDatabase.memory();
+      final cache = ResponseCache(db);
+      cache.put(
+        'mb:search-tag:jazz',
+        {
+          'release-groups': [
+            {'id': 'old-shown-mbid'},
+          ],
+        },
+        ttlSeconds: 60,
+      );
+      db.db.execute(
+        'INSERT INTO albums (mbid, title, artist_name, genres) VALUES (?, ?, ?, ?)',
+        ['old-shown-mbid', 'Old Shown', 'Shown Artist', '["jazz"]'],
+      );
+      final http = ApiHttpClient(MockClient((request) async {
+        fail('the cached pivot response should avoid network access');
+      }));
+      final musicBrainz = MusicBrainzClient(http, cache);
+      final listenBrainz = ListenBrainzClient(http, cache);
+      final albums =
+          AlbumRepository(db, musicBrainz, CoverArtClient(http, cache));
+      final ratings = RatingRepository(db);
+      final repo = RecommendationRepository(
+          db, musicBrainz, listenBrainz, albums, ratings);
+      repo.setLikedGenres(['jazz']);
+      repo.markShown('old-shown-mbid');
+
+      // Backdate the exclusion past the window directly, rather than
+      // waiting — same technique as the skip-penalty decay tests.
+      final expired = DateTime.now()
+          .subtract(recentExclusionWindow + const Duration(days: 1))
+          .millisecondsSinceEpoch;
+      db.db.execute(
+        'UPDATE recently_excluded_albums SET excluded_at = ? WHERE album_mbid = ?',
+        [expired, 'old-shown-mbid'],
+      );
+
+      expect((await repo.next()).mbid, 'old-shown-mbid');
+      db.close();
+    });
+  });
+
+  group('cross-artist diversity (SOW-0012 follow-up)', () {
+    test(
+        'consecutive recommendations from the same seed use different similar artists',
+        () async {
+      // Regression test for "the recommendation should be cross artist, if
+      // I skip don't lock me in an artist" — _nextFromSeed used to always
+      // take the single top-ranked similar artist, every time, so repeated
+      // calls off the same seed kept pulling from that one artist's whole
+      // catalog.
+      final db = AppDatabase.memory();
+      final requestedArtists = <String>[];
+      final http_ = ApiHttpClient(MockClient((request) async {
+        if (request.url.host == 'labs.api.listenbrainz.org') {
+          return http.Response(
+            jsonEncode([
+              {'artist_mbid': 'artist-a'},
+              {'artist_mbid': 'artist-b'},
+            ]),
+            200,
+          );
+        }
+        if (request.url.queryParameters.containsKey('artist')) {
+          requestedArtists.add(request.url.queryParameters['artist']!);
+        }
+        return http.Response(jsonEncode({'release-groups': []}), 200);
+      }));
+      final cache = ResponseCache(db);
+      final musicBrainz = MusicBrainzClient(http_, cache);
+      final listenBrainz = ListenBrainzClient(http_, cache);
+      final coverArt = CoverArtClient(http_, cache);
+      final albums = AlbumRepository(db, musicBrainz, coverArt);
+      final ratings = RatingRepository(db);
+      final repo = RecommendationRepository(
+          db, musicBrainz, listenBrainz, albums, ratings);
+      repo.setLikedGenres(['rock']); // gives the pivot fallback something to try
+
+      const seedMbid = 'seed-mbid';
+      db.db.execute(
+        'INSERT INTO albums (mbid, title, artist_name, artist_mbid, genres) VALUES (?, ?, ?, ?, ?)',
+        [seedMbid, 'Seed', 'Seed Artist', 'seed-artist-mbid', '["rock"]'],
+      );
+      final seedAlbum = Album(
+        mbid: seedMbid,
+        title: 'Seed',
+        artistName: 'Seed Artist',
+        artistMbid: 'seed-artist-mbid',
+        genres: const ['rock'],
+      );
+
+      // pickBestCandidate([]) is null every time (empty release-groups
+      // above), so _nextFromSeed falls through to a pivot each call — its
+      // eventual result is irrelevant here; only which artist got queried
+      // for browseReleaseGroupsByArtist matters, captured above regardless
+      // of how the call ultimately resolves.
+      await repo.nextRelated(seedAlbum).catchError((_) => seedAlbum);
+      await repo.nextRelated(seedAlbum).catchError((_) => seedAlbum);
+
+      expect(requestedArtists, ['artist-a', 'artist-b']);
       db.close();
     });
   });

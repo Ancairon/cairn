@@ -76,7 +76,14 @@ class MusicBrainzClient {
 
     await _rateLimiter.wait();
     final url = Uri.parse('$_baseUrl/release-group/$mbid').replace(
-      queryParameters: {'inc': 'genres+artist-credits+releases', 'fmt': 'json'},
+      // '+media' is a nested include that gives each release's own
+      // format/track-count directly in this one response — no separate
+      // per-release fetch needed to know a candidate's physical format
+      // before choosing a representative release (see AlbumRepository).
+      queryParameters: {
+        'inc': 'genres+artist-credits+releases+media',
+        'fmt': 'json'
+      },
     );
     final result = await http.getJson(url);
     cache.put(key, result, ttlSeconds: 60 * 60 * 24 * 90);

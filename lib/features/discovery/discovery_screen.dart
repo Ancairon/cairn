@@ -13,10 +13,13 @@ import '../../core/app_version.dart';
 import '../../data/genre_pool.dart';
 import '../../data/models/album.dart';
 import '../../data/models/album_details.dart';
+import '../../data/models/rating.dart';
 import '../../data/remote/coverart_client.dart';
 import '../../data/repositories/export_repository.dart';
+import '../../data/repositories/update_check_repository.dart';
 import '../rated_albums/rated_albums_screen.dart';
 import '../settings/settings_screen.dart';
+import 'album_details_sheet.dart';
 import 'discovery_controller.dart';
 
 class DiscoveryScreen extends StatefulWidget {
@@ -36,8 +39,6 @@ class DiscoveryScreen extends StatefulWidget {
 // down on the exposed background, closes it the same way.
 class _DiscoveryScreenState extends State<DiscoveryScreen>
     with TickerProviderStateMixin {
-  double _pendingRating = 3;
-  String? _lastSeenAlbumMbid;
   double _menuDragAccum = 0;
   double _cardDragAccum = 0;
   double _artworkHorizontalDragAccum = 0;
@@ -52,6 +53,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   bool _skipAnimating = false;
   String? _skipAlbumMbid;
   bool _searchOpen = false;
+  bool _detailsSheetOpen = false;
   bool _searching = false;
   bool _onboardingActive = false;
   bool _menuOpenState = false;
@@ -104,6 +106,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   Future<void> _initializeStartup() async {
     if (!mounted) return;
     unawaited(_runAutomaticBackup());
+    unawaited(_runAutomaticUpdateCheck());
     if (widget.controller.needsOnboarding()) {
       _onboardingActive = true;
       final navigator = _menuNavigatorKey.currentState;
@@ -180,6 +183,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
           albumRepository: widget.controller.albums,
           savedFilterRepository: widget.controller.savedFilters,
           settings: widget.controller.settings,
+          notes: widget.controller.notes,
           onAlbumTap: _openRatedAlbum,
         ),
       'Settings' => SettingsPage(
@@ -188,7 +192,11 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
           onClearArtworkCache: _clearArtworkCache,
           onClearAlbumCache: _clearAlbumCache,
           onBackup: _backupRatings,
-          onPickBackupFolder: _pickBackupFolder),
+          onPickBackupFolder: _pickBackupFolder,
+          onCheckForUpdate: () =>
+              widget.controller.checkForUpdate(force: true),
+          onRefreshRatedAlbumsMetadata:
+              widget.controller.refreshRatedAlbumsMetadata),
       _ => null,
     };
     if (page == null) return;
@@ -511,6 +519,35 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
     }
   }
 
+  // Silent unless an update is actually found — no-op both when the check
+  // isn't due yet and when it ran but found nothing newer. A failed check
+  // (network error, etc.) is also silent here; only a manual check (Settings
+  // button, tapping the version number) reports failure, since a background
+  // weekly check failing isn't something the user needs interrupted for.
+  Future<void> _runAutomaticUpdateCheck() async {
+    final (succeeded, newerVersion) = await widget.controller.checkForUpdate();
+    if (!mounted || !succeeded || newerVersion == null) return;
+    _showUpdateAvailableSnackBar(newerVersion);
+  }
+
+  void _showUpdateAvailableSnackBar(String newerVersion) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content:
+            Text('Update available: v$newerVersion. Download the APK from the '
+                'Releases page and install it manually.'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Open Releases',
+          onPressed: () => launchUrl(
+            Uri.parse(UpdateCheckRepository.releasesPageUrl),
+            mode: LaunchMode.externalApplication,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope<void>(
@@ -540,6 +577,21 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
       return;
     }
     _lastBackHandling = handlingNow;
+    // Unfocus a focused text field (comment box, Rated Albums search bar,
+    // etc.) before anything else — a stray focus left over from typing
+    // shouldn't block or confuse the navigation below, and the user
+    // expects back to at least drop focus/dismiss the keyboard first.
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus != null &&
+        primaryFocus.hasFocus &&
+        primaryFocus.context?.widget is EditableText) {
+      primaryFocus.unfocus();
+      return;
+    }
+    if (_detailsSheetOpen) {
+      Navigator.of(context).maybePop();
+      return;
+    }
     if (_searchOpen) {
       _closeSearch();
       return;
@@ -580,14 +632,6 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
 
   Widget _body(BuildContext context, DiscoveryController controller) {
     final album = controller.currentAlbum;
-
-    // A new album arrived — reset the rating slider back to neutral rather
-    // than carrying over whatever was left from the previous album.
-    if (album != null && _lastSeenAlbumMbid != album.mbid) {
-      _lastSeenAlbumMbid = album.mbid;
-      _pendingRating =
-          controller.ratings.ratingFor(album.mbid)?.stars.toDouble() ?? 3;
-    }
 
     final colors = Theme.of(context).colorScheme;
     final screenHeight = MediaQuery.of(context).size.height;
@@ -755,9 +799,18 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
                                                                     const ClampingScrollPhysics(),
                                                                 child:
                                                                     ConstrainedBox(
+                                                                  // minHeight (not maxHeight) is what actually lets
+                                                                  // Center do its job here: it guarantees this box is
+                                                                  // at least as tall as the viewport, so short content
+                                                                  // truly centers, while still letting it grow taller
+                                                                  // (and the SingleChildScrollView above take over)
+                                                                  // when content genuinely overflows. A maxHeight cap
+                                                                  // here would do the opposite — shrink-wrap to
+                                                                  // content and never give Center any room to work,
+                                                                  // which is the bug this replaced.
                                                                   constraints:
                                                                       BoxConstraints(
-                                                                    maxHeight:
+                                                                    minHeight:
                                                                         constraints
                                                                             .maxHeight,
                                                                   ),
@@ -896,7 +949,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
                                   ),
                                 ),
                               ),
-                              title: Text(r['title'] as String),
+                              title: Text(
+                                  Album.stripOuterBrackets(r['title'] as String)),
                               subtitle: RichText(
                                 text: TextSpan(
                                   style: Theme.of(context).textTheme.bodyMedium,
@@ -935,45 +989,60 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
       album.mbid,
       () => controller.albums.getDetails(album),
     );
+    final existingRating = controller.ratings.ratingFor(album.mbid);
+    final currentRatingTier =
+        existingRating == null ? null : ratingTierFor(existingRating.stars);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // A fixed 1:1 square regardless of the source image's own
-        // proportions — the artwork is always cropped to fit it.
-        ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: Listener(
-            onPointerDown: _onArtworkDragStart,
-            onPointerMove: _onArtworkDragUpdate,
-            onPointerUp: _onArtworkDragEnd,
-            child: GestureDetector(
-              onTap: () => _showPlayOptions(context, controller),
-              child: AnimatedBuilder(
-                animation: _skipController,
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: _FadingNetworkImage(
-                    url: album.coverArtUrl ??
-                        CoverArtClient.releaseGroupThumbnailUrl(album.mbid,
-                            size: 500),
-                    placeholder: _artworkPlaceholder(context),
-                  ),
-                ),
-                builder: (context, child) {
-                  final progress = _skipAlbumMbid == album.mbid
-                      ? Curves.easeInCubic.transform(_skipController.value)
-                      : 0.0;
-                  return Opacity(
-                    opacity: 1 - progress,
-                    child: FractionalTranslation(
-                      translation: Offset(-progress, -0.04 * progress),
-                      child: Transform.rotate(
-                        angle: -0.08 * progress,
-                        child: child,
+        // proportions — the artwork is always cropped to fit it. Sized to
+        // 75% of the available width (Center overrides the Column's
+        // stretch just for this child) rather than the full width, so the
+        // card's total content is short enough to fit without scrolling on
+        // most screens — a shorter Column is what actually lets Center
+        // (further up, in the LayoutBuilder wrapper) have real room to
+        // vertically center the content, instead of the SingleChildScrollView
+        // always taking over because content already fills the viewport.
+        Center(
+          child: FractionallySizedBox(
+            widthFactor: 0.75,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Listener(
+                onPointerDown: _onArtworkDragStart,
+                onPointerMove: _onArtworkDragUpdate,
+                onPointerUp: _onArtworkDragEnd,
+                child: GestureDetector(
+                  onTap: () => _showPlayOptions(context, controller),
+                  child: AnimatedBuilder(
+                    animation: _skipController,
+                    child: AspectRatio(
+                      aspectRatio: 1,
+                      child: _FadingNetworkImage(
+                        url: album.coverArtUrl ??
+                            CoverArtClient.releaseGroupThumbnailUrl(album.mbid,
+                                size: 500),
+                        placeholder: _artworkPlaceholder(context),
                       ),
                     ),
-                  );
-                },
+                    builder: (context, child) {
+                      final progress = _skipAlbumMbid == album.mbid
+                          ? Curves.easeInCubic.transform(_skipController.value)
+                          : 0.0;
+                      return Opacity(
+                        opacity: 1 - progress,
+                        child: FractionalTranslation(
+                          translation: Offset(-progress, -0.04 * progress),
+                          child: Transform.rotate(
+                            angle: -0.08 * progress,
+                            child: child,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),
@@ -1058,13 +1127,6 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
             ),
             const SizedBox(width: 6),
             Expanded(
-              child: FilledButton(
-                onPressed: () => controller.rate(_pendingRating.round()),
-                child: const Text('Rate'),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
               child: FilledButton.icon(
                 onPressed: () => _showPlayOptions(context, controller),
                 icon: const Icon(Icons.play_arrow),
@@ -1075,42 +1137,34 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
         ),
         const SizedBox(height: 8),
         Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          spacing: 8,
           children: [
-            FilterChip(
-              label: const Text('CD'),
-              avatar: const Icon(Icons.album, size: 18),
-              selected: album.ownsCd,
-              onSelected: (_) => controller.toggleOwnsCd(),
+            Expanded(
+              child: _OwnershipButton(
+                icon: Icons.album,
+                label: 'CD',
+                selected: album.ownsCd,
+                onPressed: controller.toggleOwnsCd,
+              ),
             ),
-            FilterChip(
-              label: const Text('Vinyl'),
-              avatar: const Icon(Icons.album_outlined, size: 18),
-              selected: album.ownsVinyl,
-              onSelected: (_) => controller.toggleOwnsVinyl(),
+            const SizedBox(width: 6),
+            Expanded(
+              child: _OwnershipButton(
+                icon: Icons.album_outlined,
+                label: 'Vinyl',
+                selected: album.ownsVinyl,
+                onPressed: controller.toggleOwnsVinyl,
+              ),
             ),
           ],
         ),
-        Text(
-          'Rating: ${_pendingRating.round()} star${_pendingRating.round() == 1 ? '' : 's'}',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSecondaryContainer),
-        ),
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            trackHeight: 4,
-            overlayShape: SliderComponentShape.noOverlay,
-          ),
-          child: Slider(
-            value: _pendingRating,
-            min: 1,
-            max: 5,
-            divisions: 4,
-            label: '${_pendingRating.round()}',
-            onChanged: (value) => setState(() => _pendingRating = value),
-          ),
+        const SizedBox(height: 8),
+        _RatingButtons(
+          // Keyed by album so a fresh selection state starts each time a
+          // new album arrives, instead of carrying over the previous
+          // album's in-progress (not-yet-submitted) selection.
+          key: ValueKey(album.mbid),
+          currentTier: currentRatingTier,
+          onRate: (tier) => controller.rate(tier.value),
         ),
         // Deliberately low-emphasis — a "not right now" escape, not a
         // competing call to action next to Rate/Play. Not a dislike: no
@@ -1147,82 +1201,23 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   Future<void> _showAlbumDetails(
       BuildContext context, DiscoveryController controller, Album album,
       {Future<AlbumDetails>? detailsFuture}) async {
+    // Tracked so _handleSystemBack knows to close this sheet on back — the
+    // global navigation-channel override below (see initState) means the
+    // framework's normal Navigator.maybePop()/PopScope handling for this
+    // modal route never runs; without this flag, back had no branch that
+    // closed the sheet at all and could fall through to double-back-exit.
+    _detailsSheetOpen = true;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (sheetContext) {
-        return FutureBuilder<AlbumDetails>(
-          future: detailsFuture ?? controller.albums.getDetails(album),
-          builder: (context, snapshot) {
-            final details = snapshot.data;
-            return SafeArea(
-              child: DraggableScrollableSheet(
-                expand: false,
-                initialChildSize: 0.65,
-                minChildSize: 0.35,
-                maxChildSize: 0.92,
-                builder: (context, scrollController) {
-                  return ListView(
-                    controller: scrollController,
-                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-                    children: [
-                      Text(album.title,
-                          style: Theme.of(context).textTheme.headlineSmall),
-                      Text(album.artistName,
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 8),
-                      Text([
-                        if (album.firstReleaseYear != null)
-                          '${album.firstReleaseYear}',
-                        if (album.genres.isNotEmpty) album.genres.join(' · '),
-                      ].join('  ·  ')),
-                      if (details != null && details.members.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Text('Members',
-                            style: Theme.of(context).textTheme.titleMedium),
-                        Text(details.members.join(' · ')),
-                      ],
-                      const Divider(height: 28),
-                      if (snapshot.connectionState == ConnectionState.waiting)
-                        const Center(child: CircularProgressIndicator())
-                      else if (snapshot.hasError)
-                        Text('Track listing unavailable: ${snapshot.error}')
-                      else if (details == null || details.tracks.isEmpty)
-                        const Text('No track listing available.')
-                      else ...[
-                        Text('Tracks',
-                            style: Theme.of(context).textTheme.titleLarge),
-                        const SizedBox(height: 4),
-                        ...details.tracks.map((track) => ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: SizedBox(
-                                width: 28,
-                                child: Text('${track.position ?? ''}',
-                                    textAlign: TextAlign.center),
-                              ),
-                              title: Text(track.title),
-                              trailing: track.durationMs == null
-                                  ? null
-                                  : Text(_formatDuration(track.durationMs!)),
-                            )),
-                      ],
-                    ],
-                  );
-                },
-              ),
-            );
-          },
-        );
-      },
+      builder: (sheetContext) => AlbumDetailsSheet(
+        album: album,
+        detailsFuture: detailsFuture ?? controller.albums.getDetails(album),
+        notes: controller.notes,
+      ),
     );
-  }
-
-  String _formatDuration(int durationMs) {
-    final totalSeconds = (durationMs / 1000).round();
-    final minutes = totalSeconds ~/ 60;
-    final seconds = totalSeconds % 60;
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+    _detailsSheetOpen = false;
   }
 
   Future<void> _showVibePicker(
@@ -1291,6 +1286,152 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   }
 }
 
+/// Three-button rating input (dislike/like/love) — replaces the old 1-5
+/// slider (see architecture.md). Tapping a tier button only *selects* it
+/// (animated, so the tap has visible feedback) — it does not submit, since
+/// [onRate] triggers `DiscoveryController.rate()`, which immediately fetches
+/// and displays the next album. Selecting first, then pressing the "Rate"
+/// button below, leaves time to toggle CD/vinyl or write a comment (via
+/// Details) before moving on. Stateful (not the previous StatelessWidget)
+/// so a selection can exist before being submitted; the parent keys this
+/// widget by album mbid so that in-progress selection doesn't leak across
+/// albums when a new one arrives unsubmitted.
+class _RatingButtons extends StatefulWidget {
+  final RatingTier? currentTier;
+  final void Function(RatingTier tier) onRate;
+
+  const _RatingButtons(
+      {super.key, required this.currentTier, required this.onRate});
+
+  @override
+  State<_RatingButtons> createState() => _RatingButtonsState();
+}
+
+class _RatingButtonsState extends State<_RatingButtons> {
+  late RatingTier? _selected = widget.currentTier;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+                child:
+                    _tierButton(colors, RatingTier.dislike, Icons.thumb_down)),
+            Expanded(
+                child: _tierButton(colors, RatingTier.like, Icons.thumb_up)),
+            Expanded(child: _tierButton(colors, RatingTier.love, Icons.bolt)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: colors.tertiary,
+              foregroundColor: colors.onTertiary,
+            ),
+            onPressed:
+                _selected == null ? null : () => widget.onRate(_selected!),
+            // An album that already had a rating when this sheet opened
+            // isn't being rated for the first time — pressing this button
+            // mostly just means "move on", so it reads as "Next" rather
+            // than "Rate". Still submits whatever tier is selected either
+            // way (harmless re-submit of the same rating if unchanged).
+            child: Text(widget.currentTier == null ? 'Rate' : 'Next'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Padding reserves headroom *inside* each Expanded slot, so the scale-up
+  // below grows into that padding rather than past the slot's own boundary
+  // — otherwise the animation visibly clips against its neighbor/the row's
+  // edge, since Transform.scale (which AnimatedScale uses) doesn't reserve
+  // any extra layout space of its own.
+  Widget _tierButton(ColorScheme colors, RatingTier tier, IconData icon) {
+    final selected = tier == _selected;
+    return Padding(
+      padding: const EdgeInsets.all(4),
+      child: AnimatedScale(
+        scale: selected ? 1.06 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        child: selected
+            ? FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.tertiary,
+                  foregroundColor: colors.onTertiary,
+                ),
+                onPressed: () => setState(() => _selected = tier),
+                child: Icon(icon),
+              )
+            : FilledButton.tonal(
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.tertiaryContainer,
+                  foregroundColor: colors.onTertiaryContainer,
+                ),
+                onPressed: () => setState(() => _selected = tier),
+                child: Icon(icon),
+              ),
+      ),
+    );
+  }
+}
+
+/// A pill-shaped ownership toggle (CD/vinyl) — plain filled/tonal buttons,
+/// no checkbox, matching the rating buttons' shape. Secondary-colored, to
+/// visually group with the rating row's tertiary and the primary-colored
+/// Vibe/Play row above — three rows, three distinct palette roles.
+class _OwnershipButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  const _OwnershipButton({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(4),
+      child: AnimatedScale(
+        scale: selected ? 1.04 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        child: selected
+            ? FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.secondary,
+                  foregroundColor: colors.onSecondary,
+                ),
+                onPressed: onPressed,
+                icon: Icon(icon, size: 18),
+                label: Text(label),
+              )
+            : FilledButton.tonalIcon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: colors.secondaryContainer,
+                  foregroundColor: colors.onSecondaryContainer,
+                ),
+                onPressed: onPressed,
+                icon: Icon(icon, size: 18),
+                label: Text(label),
+              ),
+      ),
+    );
+  }
+}
+
 /// The background menu's home page — just the entry list, anchored to the
 /// bottom (the edge revealed first as the card lifts).
 class _MenuHomePage extends StatelessWidget {
@@ -1341,6 +1482,7 @@ class _MenuHomePage extends StatelessWidget {
                         albumRepository: controller.albums,
                         savedFilterRepository: controller.savedFilters,
                         settings: controller.settings,
+                        notes: controller.notes,
                         onAlbumTap: onAlbumTap,
                       ),
                     ),
@@ -1359,20 +1501,55 @@ class _MenuHomePage extends StatelessWidget {
                             onClearArtworkCache: onClearArtworkCache,
                             onClearAlbumCache: onClearAlbumCache,
                             onBackup: onBackup,
-                            onPickBackupFolder: onPickBackupFolder)),
+                            onPickBackupFolder: onPickBackupFolder,
+                            onCheckForUpdate: () =>
+                                controller.checkForUpdate(force: true),
+                            onRefreshRatedAlbumsMetadata:
+                                controller.refreshRatedAlbumsMetadata)),
                   ),
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                'v$appVersion · alpha',
-                style: Theme.of(context).textTheme.labelSmall,
+              GestureDetector(
+                onTap: () => _checkForUpdate(context),
+                child: Text(
+                  'v$appVersion · alpha',
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
               ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _checkForUpdate(BuildContext context) async {
+    final (succeeded, newerVersion) =
+        await controller.checkForUpdate(force: true);
+    if (!context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (!succeeded) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text("Couldn't check for updates. Try again later.")));
+    } else if (newerVersion != null) {
+      messenger.showSnackBar(SnackBar(
+        content:
+            Text('Update available: v$newerVersion. Download the APK from the '
+                'Releases page and install it manually.'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Open Releases',
+          onPressed: () => launchUrl(
+            Uri.parse(UpdateCheckRepository.releasesPageUrl),
+            mode: LaunchMode.externalApplication,
+          ),
+        ),
+      ));
+    } else {
+      messenger.showSnackBar(
+          const SnackBar(content: Text("You're on the latest version.")));
+    }
   }
 }
 

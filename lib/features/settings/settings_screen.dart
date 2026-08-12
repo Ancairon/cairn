@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/repositories/backup_repository.dart';
+import '../../data/repositories/update_check_repository.dart';
 
 /// Display label -> stored value for the default-player-app setting. The
 /// stored value is the stable constant from settings_repository.dart; the
@@ -22,6 +24,9 @@ class SettingsPage extends StatefulWidget {
   final VoidCallback onClearAlbumCache;
   final Future<void> Function() onBackup;
   final Future<String?> Function() onPickBackupFolder;
+  final Future<(bool succeeded, String? newerVersion)> Function()
+      onCheckForUpdate;
+  final Future<int> Function() onRefreshRatedAlbumsMetadata;
 
   const SettingsPage(
       {super.key,
@@ -30,7 +35,9 @@ class SettingsPage extends StatefulWidget {
       required this.onClearArtworkCache,
       required this.onClearAlbumCache,
       required this.onBackup,
-      required this.onPickBackupFolder});
+      required this.onPickBackupFolder,
+      required this.onCheckForUpdate,
+      required this.onRefreshRatedAlbumsMetadata});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -120,6 +127,48 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     setState(() => _autoBackupsEnabled = true);
     widget.settings.setAutoBackupsEnabled(true);
+  }
+
+  Future<void> _checkForUpdate() async {
+    final (succeeded, newerVersion) = await widget.onCheckForUpdate();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (!succeeded) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text("Couldn't check for updates. Try again later.")));
+    } else if (newerVersion != null) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            'Update available: v$newerVersion. Download the APK from the '
+            'Releases page and install it manually.'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Open Releases',
+          onPressed: () => launchUrl(
+            Uri.parse(UpdateCheckRepository.releasesPageUrl),
+            mode: LaunchMode.externalApplication,
+          ),
+        ),
+      ));
+    } else {
+      messenger.showSnackBar(
+          const SnackBar(content: Text("You're on the latest version.")));
+    }
+  }
+
+  Future<void> _refreshRatedAlbumsMetadata() async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(
+      content: Text(
+          "Refreshing rated albums' metadata — this can take a while..."),
+      duration: Duration(seconds: 4),
+    ));
+    final count = await widget.onRefreshRatedAlbumsMetadata();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content:
+          Text('Refreshed metadata for $count album${count == 1 ? '' : 's'}.'),
+    ));
   }
 
   Future<void> _confirmAction(
@@ -237,6 +286,19 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
               _OptionTile(
+                label: "Refresh rated albums' metadata",
+                selected: false,
+                onTap: () => _confirmAction(
+                  title: "Refresh rated albums' metadata?",
+                  message:
+                      'Re-fetches title, cover art, and other metadata for '
+                      'every rated album from MusicBrainz. This can take a '
+                      'while for a large journal. Ownership flags and '
+                      'ratings are preserved.',
+                  action: _refreshRatedAlbumsMetadata,
+                ),
+              ),
+              _OptionTile(
                 label: 'Backup ratings',
                 selected: false,
                 onTap: widget.onBackup,
@@ -255,6 +317,16 @@ class _SettingsPageState extends State<SettingsPage> {
                     : 'Change backup folder',
                 selected: false,
                 onTap: _setBackupFolder,
+              ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Text('About', style: textTheme.titleMedium),
+              ),
+              _OptionTile(
+                label: 'Check for updates',
+                selected: false,
+                onTap: _checkForUpdate,
               ),
             ],
           ),

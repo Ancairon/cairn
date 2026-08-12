@@ -28,6 +28,11 @@ void main() {
     expect(settings.backupFolderPath(), '/tmp/cairn-backups');
     expect(settings.backupConsent(), 'accepted');
 
+    expect(settings.lastUpdateCheckAt(), isNull);
+    final checkedAt = DateTime.utc(2026, 8, 12, 10, 0, 0);
+    settings.setLastUpdateCheckAt(checkedAt);
+    expect(settings.lastUpdateCheckAt(), checkedAt);
+
     db.close();
   });
 }

@@ -45,6 +45,47 @@ void main() {
       final best = pickBestCandidate(candidates, seedGenres: ['jazz'], excludeMbids: {'a1'});
       expect(best, isNull);
     });
+
+    test('without nextInt, ties resolve deterministically to the first found',
+        () {
+      final candidates = [
+        _candidate('a1', genres: ['jazz']),
+        _candidate('a2', genres: ['jazz']),
+        _candidate('a3', genres: ['jazz']),
+      ];
+      final best = pickBestCandidate(candidates, seedGenres: ['jazz'], excludeMbids: {});
+      expect(best, 'a1');
+    });
+
+    test('with nextInt, picks randomly among candidates tied at the best score',
+        () {
+      final candidates = [
+        _candidate('a1', genres: ['jazz']),
+        _candidate('a2', genres: ['jazz']),
+        _candidate('a3', genres: ['jazz']),
+      ];
+      final best = pickBestCandidate(
+        candidates,
+        seedGenres: ['jazz'],
+        excludeMbids: {},
+        nextInt: (max) => max - 1,
+      );
+      expect(best, 'a3');
+    });
+
+    test('a lower-scoring candidate never wins even via nextInt', () {
+      final candidates = [
+        _candidate('a1', genres: ['jazz', 'bebop']),
+        _candidate('a2', genres: ['jazz']),
+      ];
+      final best = pickBestCandidate(
+        candidates,
+        seedGenres: ['jazz', 'bebop'],
+        excludeMbids: {},
+        nextInt: (max) => max - 1,
+      );
+      expect(best, 'a1');
+    });
   });
 
   group('pickRandomExcludingRecent', () {

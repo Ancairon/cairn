@@ -123,6 +123,25 @@ class SettingsRepository {
     );
   }
 
+  DateTime? lastUpdateCheckAt() {
+    final rows = database.db
+        .select('SELECT last_update_check_at FROM app_state WHERE id = 0');
+    if (rows.isEmpty) return null;
+    final timestamp = rows.first['last_update_check_at'] as int?;
+    return timestamp == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(timestamp, isUtc: true);
+  }
+
+  void setLastUpdateCheckAt(DateTime value) {
+    database.db.execute(
+      'INSERT INTO app_state (id, last_update_check_at) VALUES (0, ?) '
+      'ON CONFLICT(id) DO UPDATE SET '
+      'last_update_check_at = excluded.last_update_check_at',
+      [value.toUtc().millisecondsSinceEpoch],
+    );
+  }
+
   String? _appStateString(String column) {
     final rows =
         database.db.select('SELECT $column FROM app_state WHERE id = 0');

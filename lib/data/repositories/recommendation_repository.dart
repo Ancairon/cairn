@@ -24,6 +24,18 @@ const _fallbackPivotGenres = [
   'soul',
 ];
 
+// Explicit-skip-button penalty threshold (SOW-0012, lowered from 5 — the
+// user found 5 too slow to actually deprioritize an album they kept
+// rejecting). Shared by `_isPenalized` (has DB access) and
+// `pickBestCandidate` (a pure function that re-checks it inline, since it
+// can't call `_isPenalized` itself).
+const skipPenaltyThreshold = 3;
+
+// How long a skipped or shown album stays excluded from recommendations
+// after an app restart (SOW-0012) — matches the decay window skip
+// penalties already used, rather than inventing a second time constant.
+const recentExclusionWindow = Duration(days: 7);
+
 /// One global "anchor" album drives every recommendation — no branch trees,
 /// no per-thread lineage state. See .agents/sow/specs/architecture.md.
 class RecommendationRepository {
@@ -32,15 +44,6 @@ class RecommendationRepository {
   final ListenBrainzClient listenBrainz;
   final AlbumRepository albums;
   final RatingRepository ratings;
-
-  // Session-only escape valve: "not right now" rather than a dislike. Never
-  // persisted (no schema change) — resets on every app restart — and never
-  // touches the anchor or pivot logic below, unlike a real 1-2/4-5 rating.
-  final Set<String> _sessionSkipped = {};
-
-  // Session-only display history. Unlike ratings and skips, this is not
-  // persisted: reopening the app starts a fresh recommendation session.
-  final Set<String> _sessionShown = {};
 
   // Session-only preference. It deliberately is not persisted: a vibe lock
   // constrains this discovery run, not the user's long-term taste profile.
@@ -104,7 +107,7 @@ class RecommendationRepository {
   /// new anchor); falls back to the existing pivot behavior if there are
   /// zero 4-5★ ratings.
   Future<Album> skip(String mbid) async {
-    _sessionSkipped.add(mbid);
+    _recordExclusion(mbid);
     final prefetched = await _takePrefetched('skip');
     if (prefetched != null) return prefetched;
     final fallbackSeedMbid = _pickFallbackSeed();
@@ -245,12 +248,30 @@ class RecommendationRepository {
 
   void clearSessionVibeGenre() => _sessionVibeGenre = null;
 
-  /// Records an album that has actually been displayed in this app session.
-  /// Keeping this separate from ratings/skips preserves their existing
-  /// semantics while preventing a recommendation loop within one session.
+  /// Records an album that has actually been displayed, so it isn't
+  /// immediately re-recommended. Persisted (SOW-0012, `recently_excluded_albums`)
+  /// rather than session-only — the earlier in-memory-only version reset on
+  /// every app restart, which combined with the anchor path's lack of any
+  /// randomization made skipped/shown albums reappear far too readily.
   void markShown(String mbid) {
     final normalized = mbid.trim();
-    if (normalized.isNotEmpty) _sessionShown.add(normalized);
+    if (normalized.isNotEmpty) _recordExclusion(normalized);
+  }
+
+  // Upserts [mbid] into recently_excluded_albums and opportunistically
+  // prunes rows past recentExclusionWindow — cheap, and keeps the table
+  // bounded without a separate scheduled cleanup job (this app has none).
+  void _recordExclusion(String mbid) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    database.db.execute(
+      'INSERT INTO recently_excluded_albums (album_mbid, excluded_at) VALUES (?, ?) '
+      'ON CONFLICT(album_mbid) DO UPDATE SET excluded_at = excluded.excluded_at',
+      [mbid, now],
+    );
+    database.db.execute(
+      'DELETE FROM recently_excluded_albums WHERE excluded_at < ?',
+      [now - recentExclusionWindow.inMilliseconds],
+    );
   }
 
   Future<Album> _nextFromCurrentAnchorOrPivot({bool recordPivot = true}) async {
@@ -269,10 +290,13 @@ class RecommendationRepository {
 
     final similarArtistMbids =
         await listenBrainz.similarArtists(seed.artistMbid!);
+    final chosenArtist = _pickDifferentArtist(
+        similarArtistMbids, _recentRecommendedArtists().toSet());
     final candidates = <Map<String, dynamic>>[];
-    for (final artistMbid in similarArtistMbids.take(1)) {
+    if (chosenArtist != null) {
       candidates
-          .addAll(await musicBrainz.browseReleaseGroupsByArtist(artistMbid));
+          .addAll(await musicBrainz.browseReleaseGroupsByArtist(chosenArtist));
+      _recordRecommendedArtist(chosenArtist);
     }
 
     final vibe = _sessionVibeGenre;
@@ -284,7 +308,8 @@ class RecommendationRepository {
     final best = pickBestCandidate(candidates,
         seedGenres: seed.genres,
         excludeMbids: excluded,
-        skipPenalties: _effectiveSkipPenalties());
+        skipPenalties: _effectiveSkipPenalties(),
+        nextInt: _random.nextInt);
     if (best == null) {
       return _pivotForSessionVibeOrPivot(recordPivot: recordPivot);
     }
@@ -370,20 +395,26 @@ class RecommendationRepository {
   }
 
   bool _isPenalized(String mbid) =>
-      (_effectiveSkipPenalties()[mbid] ?? 0) >= 5;
+      (_effectiveSkipPenalties()[mbid] ?? 0) >= skipPenaltyThreshold;
 
   int _decayedSkipCount(int count, int ageMs) {
     final periods = ageMs ~/ const Duration(days: 7).inMilliseconds;
     return (count - periods).clamp(0, count);
   }
 
-  // Rated albums, this session's skips, and already-displayed albums are all
-  // excluded from candidates. Only ratings are persisted; the other two sets
-  // live for the current process only.
-  Set<String> _excludedMbids() =>
-      ratings.allRatings().map((r) => r.albumMbid).toSet()
-        ..addAll(_sessionSkipped)
-        ..addAll(_sessionShown);
+  // Rated albums plus every skipped/shown album from the last
+  // recentExclusionWindow (SOW-0012) are excluded from candidates —
+  // persisted, so this survives an app restart rather than resetting.
+  Set<String> _excludedMbids() {
+    final cutoff = DateTime.now().millisecondsSinceEpoch -
+        recentExclusionWindow.inMilliseconds;
+    final rows = database.db.select(
+      'SELECT album_mbid FROM recently_excluded_albums WHERE excluded_at >= ?',
+      [cutoff],
+    );
+    return ratings.allRatings().map((r) => r.albumMbid).toSet()
+      ..addAll(rows.map((row) => row['album_mbid'] as String));
+  }
 
   String? _currentAnchor() {
     final rows = database.db
@@ -440,6 +471,49 @@ class RecommendationRepository {
     );
   }
 
+  // SOW-0012 follow-up: _nextFromSeed used to always take the single
+  // top-ranked similar artist, every time, for a given seed — a skip or a
+  // fresh recommendation off the same anchor kept pulling from that one
+  // artist's whole catalog instead of genuinely different music. These
+  // mirror _recentFallbackSeeds/_recordFallbackSeed's exact pattern, just
+  // for similar-artist mbids instead of album mbids.
+  List<String> _recentRecommendedArtists() {
+    final rows = database.db.select(
+        'SELECT recent_recommended_artist_mbids FROM app_state WHERE id = 0');
+    if (rows.isEmpty || rows.first['recent_recommended_artist_mbids'] == null) {
+      return [];
+    }
+    return (jsonDecode(rows.first['recent_recommended_artist_mbids'] as String)
+            as List)
+        .cast<String>();
+  }
+
+  void _recordRecommendedArtist(String artistMbid) {
+    final updated = [..._recentRecommendedArtists(), artistMbid];
+    final capped =
+        updated.length > 5 ? updated.sublist(updated.length - 5) : updated;
+    database.db.execute(
+      'INSERT INTO app_state (id, recent_recommended_artist_mbids) VALUES (0, ?) '
+      'ON CONFLICT(id) DO UPDATE SET '
+      'recent_recommended_artist_mbids = excluded.recent_recommended_artist_mbids',
+      [jsonEncode(capped)],
+    );
+  }
+
+  // Picks the highest-ranked artist in [ranked] that isn't in
+  // [recentlyUsed], preserving ListenBrainz's own similarity ordering
+  // (deterministic — recency-exclusion alone is the diversifying signal
+  // here, not additional randomness on top of it). Falls back to the
+  // literal top-ranked artist if every candidate has been recently used,
+  // rather than dead-ending.
+  String? _pickDifferentArtist(List<String> ranked, Set<String> recentlyUsed) {
+    if (ranked.isEmpty) return null;
+    for (final mbid in ranked) {
+      if (!recentlyUsed.contains(mbid)) return mbid;
+    }
+    return ranked.first;
+  }
+
   // Skip's no-anchor reseed source: a uniformly-random 4-5★ rated album,
   // excluding this session's recently-used fallback seeds so consecutive
   // skips don't immediately repeat. Never sets the anchor — see skip()'s
@@ -463,14 +537,22 @@ class RecommendationRepository {
 /// Pure scoring function — no DB, no network. Picks the release-group mbid
 /// with the highest genre overlap against [seedGenres], skipping anything in
 /// [excludeMbids] (already-rated albums) and non-studio-album release types.
+///
+/// When multiple candidates tie at the best score, picks randomly among
+/// them via [nextInt] (SOW-0012 — the anchor-based recommendation path had
+/// no randomization anywhere, so a stable anchor produced the exact same
+/// ranking every time). Omitting [nextInt] preserves the original
+/// deterministic "first one found" behavior, so existing callers/tests that
+/// don't pass it are unaffected.
 String? pickBestCandidate(
   List<Map<String, dynamic>> candidates, {
   required List<String> seedGenres,
   required Set<String> excludeMbids,
   Map<String, int> skipPenalties = const {},
+  int Function(int max)? nextInt,
 }) {
   final seedSet = seedGenres.map((g) => g.toLowerCase()).toSet();
-  Map<String, dynamic>? best;
+  final tiedForBest = <Map<String, dynamic>>[];
   var bestScore = -1;
 
   for (final candidate in candidates) {
@@ -491,15 +573,22 @@ String? pickBestCandidate(
         .toSet();
     final overlap = genres.intersection(seedSet).length;
     final score = overlap -
-        ((skipPenalties[mbid] ?? 0) >= 5 ? 2 : 0);
+        ((skipPenalties[mbid] ?? 0) >= skipPenaltyThreshold ? 2 : 0);
 
     if (score > bestScore) {
       bestScore = score;
-      best = candidate;
+      tiedForBest.clear();
+      tiedForBest.add(candidate);
+    } else if (score == bestScore) {
+      tiedForBest.add(candidate);
     }
   }
 
-  return best?['id'] as String?;
+  if (tiedForBest.isEmpty) return null;
+  final picked = nextInt == null
+      ? tiedForBest.first
+      : tiedForBest[nextInt(tiedForBest.length)];
+  return picked['id'] as String?;
 }
 
 /// Pure selection helper — no DB, no network. Picks a uniformly-random value

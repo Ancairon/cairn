@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../../core/app_version.dart';
 import '../../data/models/album.dart';
 import '../../data/remote/musicbrainz_client.dart';
 import '../../data/repositories/album_repository.dart';
@@ -8,6 +9,8 @@ import '../../data/repositories/deep_link_repository.dart';
 import '../../data/repositories/saved_filter_repository.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/repositories/backup_repository.dart';
+import '../../data/repositories/notes_repository.dart';
+import '../../data/repositories/update_check_repository.dart';
 
 /// Drives the single discovery screen. Plain ChangeNotifier — no extra
 /// state-management package, matching the rest of this project.
@@ -20,6 +23,8 @@ class DiscoveryController extends ChangeNotifier {
   final SettingsRepository settings;
   final SavedFilterRepository savedFilters;
   final BackupRepository backups;
+  final NotesRepository notes;
+  final UpdateCheckRepository updateCheck;
 
   DiscoveryController(
     this.albums,
@@ -30,6 +35,8 @@ class DiscoveryController extends ChangeNotifier {
     this.settings,
     this.savedFilters,
     this.backups,
+    this.notes,
+    this.updateCheck,
   );
 
   Album? currentAlbum;
@@ -67,6 +74,59 @@ class DiscoveryController extends ChangeNotifier {
       });
 
   void resetSkipPenalties() => recommendations.resetSkipPenalties();
+
+  /// Re-fetches metadata for every rated album, overwriting each local row
+  /// (`AlbumRepository.refreshMetadata`, unlike `getOrFetch`'s "trust any
+  /// existing row" default). Lets albums fetched before an improvement to
+  /// the repository's own logic — the side-labelled-release preference
+  /// (SOW-0010) or bracket-title cleanup — pick it up without a full data
+  /// wipe. Sequential and can take a while: MusicBrainz is rate-limited to
+  /// ~1 request/second, so a large rated-albums journal means a real wait;
+  /// the Settings action calling this warns the user before starting.
+  /// One album's fetch failing must not abort the rest of the run.
+  Future<int> refreshRatedAlbumsMetadata() async {
+    var refreshed = 0;
+    for (final rating in ratings.allRatings()) {
+      try {
+        await albums.refreshMetadata(rating.albumMbid);
+        refreshed++;
+      } catch (_) {
+        // Skip and continue.
+      }
+    }
+    return refreshed;
+  }
+
+  /// Checks GitHub Releases for a newer version. Always a no-op in debug
+  /// builds, regardless of [force] — see the in-method comment. Without
+  /// [force], this is a no-op (returns `(true, null)` without touching the network) unless at
+  /// least 7 days have passed since the last check — the same
+  /// "opportunistic, on launch/resume, gated by a stored timestamp" pattern
+  /// already used for weekly database backups, rather than adding this
+  /// app's first-ever true background-scheduling mechanism just for this.
+  /// [force] (the Settings button, and tapping the version number) always
+  /// hits the network regardless of timing. Returns `(succeeded, newerVersion)`
+  /// — `newerVersion` is null both when the check didn't run and when it ran
+  /// but found nothing newer, so callers distinguish those via `succeeded`.
+  Future<(bool succeeded, String? newerVersion)> checkForUpdate(
+      {bool force = false}) async {
+    // Debug builds aren't the audience for "go download the public
+    // release from GitHub" — skip entirely, rather than compare a
+    // fast-moving internal alpha version against the public release track
+    // and risk a nonsensical result (they're two different numbering
+    // schemes since SOW-0014's release-versioning split).
+    if (kDebugMode) return (true, null);
+    if (!force) {
+      final last = settings.lastUpdateCheckAt();
+      if (last != null && DateTime.now().difference(last).inDays < 7) {
+        return (true, null);
+      }
+    }
+    final latest = await updateCheck.latestVersion();
+    settings.setLastUpdateCheckAt(DateTime.now());
+    if (latest == null) return (false, null);
+    return (true, isNewerVersion(latest, appVersion) ? latest : null);
+  }
 
   Future<void> _run(Future<Album> Function() action) async {
     isLoading = true;

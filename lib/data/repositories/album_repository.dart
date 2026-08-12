@@ -79,6 +79,7 @@ class AlbumRepository {
     _addArtistCredits(members, data['artist-credit']);
     for (final medium in ((data['media'] as List?) ?? const [])) {
       final mediumMap = (medium as Map).cast<String, dynamic>();
+      final mediumPosition = mediumMap['position'] as int? ?? 1;
       for (final rawTrack in ((mediumMap['tracks'] as List?) ?? const [])) {
         final track = (rawTrack as Map).cast<String, dynamic>();
         final recording = (track['recording'] as Map?)?.cast<String, dynamic>();
@@ -93,10 +94,20 @@ class AlbumRepository {
               recording?['title'] as String? ??
               'Untitled track',
           durationMs: length,
+          number: track['number'] as String?,
+          mediumPosition: mediumPosition,
         ));
       }
     }
-    tracks.sort((a, b) => (a.position ?? 0).compareTo(b.position ?? 0));
+    // position restarts at 1 per medium, so a genuinely multi-disc release
+    // needs mediumPosition compared first — sorting on position alone would
+    // interleave medium 2's tracks with medium 1's wherever they share a
+    // position number.
+    tracks.sort((a, b) {
+      final mediumCompare = a.mediumPosition.compareTo(b.mediumPosition);
+      if (mediumCompare != 0) return mediumCompare;
+      return (a.position ?? 0).compareTo(b.position ?? 0);
+    });
     final primaryArtist = album.artistName.trim().toLowerCase();
     members.removeWhere((member) => member.toLowerCase() == primaryArtist);
     return AlbumDetails(
@@ -122,12 +133,37 @@ class AlbumRepository {
   Future<Album> getOrFetch(String releaseGroupMbid) async {
     final existing = _readLocal(releaseGroupMbid);
     if (existing != null) return existing;
+    return _fetchAndStoreAlbum(releaseGroupMbid);
+  }
 
+  /// Re-fetches [releaseGroupMbid]'s metadata from MusicBrainz/Cover Art
+  /// Archive and overwrites the local row, even if one already exists —
+  /// unlike [getOrFetch], which trusts any existing row and never re-fetches
+  /// it. Backs the Settings "Refresh rated albums' metadata" action, so
+  /// albums fetched before an improvement to this repository's own logic
+  /// (e.g. the side-labelled-release preference, or bracket-title cleanup)
+  /// can pick it up without a full data wipe.
+  Future<Album> refreshMetadata(String releaseGroupMbid) =>
+      _fetchAndStoreAlbum(releaseGroupMbid);
+
+  Future<Album> _fetchAndStoreAlbum(String releaseGroupMbid) async {
     final data = await musicBrainz.lookupReleaseGroup(releaseGroupMbid);
     final chronologicalReleases = _chronologicalReleases(data);
-    final representativeReleaseMbid = chronologicalReleases.isNotEmpty
-        ? chronologicalReleases.first['id'] as String?
-        : null;
+    // Prefer the earliest release that actually has a side-labelled format
+    // (Vinyl/Cassette conventionally use A/B-style sides; CD/digital don't)
+    // — a proxy for "likely has meaningful disc-side track data", not a
+    // guarantee (a release tagged Vinyl can still lack lettered track
+    // numbers if whoever entered it didn't fill those in). Falls back to
+    // the plain earliest release when no side-labelled one exists, which is
+    // the only behavior this app had before this preference existed.
+    final sideLabelledRelease = chronologicalReleases.firstWhere(
+      _looksSideLabelled,
+      orElse: () => const <String, dynamic>{},
+    );
+    final representativeReleaseMbid = (sideLabelledRelease['id'] as String?) ??
+        (chronologicalReleases.isNotEmpty
+            ? chronologicalReleases.first['id'] as String?
+            : null);
 
     final genres = ((data['genres'] as List?) ?? [])
         .cast<Map<String, dynamic>>()
@@ -141,7 +177,7 @@ class AlbumRepository {
     final album = Album(
       mbid: releaseGroupMbid,
       representativeReleaseMbid: representativeReleaseMbid,
-      title: data['title'] as String,
+      title: Album.stripOuterBrackets(data['title'] as String),
       artistName: _artistName(data),
       artistMbid: _artistMbid(data),
       firstReleaseYear: _yearFrom(data['first-release-date'] as String?),
@@ -149,7 +185,21 @@ class AlbumRepository {
       coverArtUrl: coverArtUrl,
     );
     _writeLocal(album);
-    return album;
+    // Re-read rather than return `album` directly — `album` doesn't carry
+    // this row's existing owns_cd/owns_vinyl (they're not part of what
+    // MusicBrainz returns), so the accurate values come from the row
+    // _writeLocal's upsert just left in place.
+    return _readLocal(releaseGroupMbid)!;
+  }
+
+  bool _looksSideLabelled(Map<String, dynamic> release) {
+    final media = ((release['media'] as List?) ?? const [])
+        .cast<Map>()
+        .map((m) => m.cast<String, dynamic>());
+    return media.any((medium) {
+      final format = (medium['format'] as String?)?.toLowerCase() ?? '';
+      return format.contains('vinyl') || format.contains('cassette');
+    });
   }
 
   List<Map<String, dynamic>> _chronologicalReleases(Map<String, dynamic> data) {
@@ -215,11 +265,24 @@ class AlbumRepository {
     }
   }
 
+  // An upsert (not a plain INSERT) so refreshMetadata can overwrite an
+  // existing row's metadata — owns_cd/owns_vinyl are deliberately excluded
+  // from the UPDATE clause, since MusicBrainz has no opinion on physical
+  // ownership and a refresh must never touch it.
   void _writeLocal(Album album) {
     database.db.execute(
       'INSERT INTO albums (mbid, representative_release_mbid, title, artist_name, artist_mbid, '
       'first_release_year, genres, cover_art_url, metadata_fetched_at) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) '
+      'ON CONFLICT(mbid) DO UPDATE SET '
+      'representative_release_mbid = excluded.representative_release_mbid, '
+      'title = excluded.title, '
+      'artist_name = excluded.artist_name, '
+      'artist_mbid = excluded.artist_mbid, '
+      'first_release_year = excluded.first_release_year, '
+      'genres = excluded.genres, '
+      'cover_art_url = excluded.cover_art_url, '
+      'metadata_fetched_at = excluded.metadata_fetched_at',
       [
         album.mbid,
         album.representativeReleaseMbid,

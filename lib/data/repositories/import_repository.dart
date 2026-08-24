@@ -16,6 +16,13 @@ class ImportRow {
   final DateTime ratedAt;
   final String? notes;
 
+  /// False for rows exported before this project added ownership to the
+  /// export format — never guessed, since "unknown" and "not owned" would
+  /// otherwise be indistinguishable, but treating an old file as "not
+  /// owned" is the same default a never-imported album already has.
+  final bool ownsCd;
+  final bool ownsVinyl;
+
   ImportRow({
     required this.mbid,
     required this.title,
@@ -23,6 +30,8 @@ class ImportRow {
     required this.stars,
     required this.ratedAt,
     required this.notes,
+    this.ownsCd = false,
+    this.ownsVinyl = false,
   });
 }
 
@@ -151,6 +160,8 @@ class ImportRepository {
     for (final row in [...preview.newRows, ...preview.overwriteRows]) {
       ratings.rate(row.mbid!, row.stars,
           notes: row.notes, ratedAt: row.ratedAt);
+      albums.setOwnership(row.mbid!,
+          ownsCd: row.ownsCd, ownsVinyl: row.ownsVinyl);
     }
     return preview.newCount + preview.overwriteCount;
   }
@@ -171,29 +182,44 @@ class ImportRepository {
         stars: row['stars'] as int,
         ratedAt: DateTime.parse(row['rated_at'] as String),
         notes: row['notes'] as String?,
+        ownsCd: row['owns_cd'] as bool? ?? false,
+        ownsVinyl: row['owns_vinyl'] as bool? ?? false,
       );
     }).toList();
   }
 
-  /// Supports both the current export header (`mbid,title,artist,year,
-  /// genres,stars,rated_at,notes`) and the format exported before this
-  /// project added `mbid` (`title,artist,year,genres,stars,rated_at,
-  /// notes`) — an old export has no `mbid` at all, so its rows land in
-  /// [ImportPreview.unmatchedRows] rather than crashing the whole file.
+  /// Looks columns up by name rather than a fixed position, since this
+  /// format has grown twice (adding `mbid`, then `owns_cd`/`owns_vinyl`) —
+  /// a column missing from an older export (checked by name, not position)
+  /// falls back to its `ImportRow` default rather than crashing the file.
   List<ImportRow> _parseCsv(String content) {
     final rows = _parseCsvRows(content);
     if (rows.length <= 1) return const [];
     final header = rows.first;
-    final hasMbid = header.isNotEmpty && header.first == 'mbid';
-    final offset = hasMbid ? 1 : 0;
+    final mbidIndex = header.indexOf('mbid');
+    final titleIndex = header.indexOf('title');
+    final artistIndex = header.indexOf('artist');
+    final starsIndex = header.indexOf('stars');
+    final ratedAtIndex = header.indexOf('rated_at');
+    final notesIndex = header.indexOf('notes');
+    final ownsCdIndex = header.indexOf('owns_cd');
+    final ownsVinylIndex = header.indexOf('owns_vinyl');
+    String field(List<String> fields, int index) =>
+        index == -1 || index >= fields.length ? '' : fields[index];
+
     return rows.skip(1).map((fields) {
+      final mbidValue = field(fields, mbidIndex);
       return ImportRow(
-        mbid: hasMbid && fields[0].isNotEmpty ? fields[0] : null,
-        title: fields[offset],
-        artist: fields[offset + 1],
-        stars: int.parse(fields[offset + 4]),
-        ratedAt: DateTime.parse(fields[offset + 5]),
-        notes: fields[offset + 6].isEmpty ? null : fields[offset + 6],
+        mbid: mbidValue.isEmpty ? null : mbidValue,
+        title: field(fields, titleIndex),
+        artist: field(fields, artistIndex),
+        stars: int.parse(field(fields, starsIndex)),
+        ratedAt: DateTime.parse(field(fields, ratedAtIndex)),
+        notes: field(fields, notesIndex).isEmpty
+            ? null
+            : field(fields, notesIndex),
+        ownsCd: field(fields, ownsCdIndex) == 'true',
+        ownsVinyl: field(fields, ownsVinylIndex) == 'true',
       );
     }).toList();
   }

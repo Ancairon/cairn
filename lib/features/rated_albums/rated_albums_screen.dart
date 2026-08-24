@@ -657,48 +657,56 @@ class _RatedAlbumsPageState extends State<RatedAlbumsPage> {
   Widget _ownershipRatingRow(
       BuildContext context, Album album, Rating rating, int index) {
     final primary = Theme.of(context).colorScheme.primary;
+    // Only the badges this album actually has, packed together with no
+    // gaps — a missing badge no longer leaves an empty slot before the
+    // ones that follow it.
+    final badges = <Widget>[
+      if (album.ownsVinyl)
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: 'Vinyl',
+            iconSize: 18,
+            color: primary,
+            icon: const Icon(Icons.album_outlined),
+            onPressed: () => _toggleGridOwnership(index, cd: false),
+          ),
+        ),
+      if (album.ownsCd)
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: 'CD',
+            iconSize: 18,
+            color: primary,
+            icon: const Icon(Icons.album),
+            onPressed: () => _toggleGridOwnership(index, cd: true),
+          ),
+        ),
+      if (_albumsWithNotes.contains(album.mbid))
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: Icon(Icons.sticky_note_2, size: 18, color: primary),
+        ),
+    ];
     return Row(
       mainAxisSize: MainAxisSize.max,
       children: [
+        // Fixed total width regardless of how many badges this album has —
+        // this (not the per-badge packing above) is what keeps the trailing
+        // rating icon aligned at the same horizontal position across rows.
         SizedBox(
-          width: 28,
+          width: 28 * 3,
           height: 28,
-          child: album.ownsVinyl
-              ? IconButton(
-                  padding: EdgeInsets.zero,
-                  alignment: Alignment.centerLeft,
-                  tooltip: 'Vinyl',
-                  iconSize: 18,
-                  color: primary,
-                  icon: const Icon(Icons.album_outlined),
-                  onPressed: () => _toggleGridOwnership(index, cd: false),
-                )
-              : null,
-        ),
-        SizedBox(
-          width: 28,
-          height: 28,
-          child: album.ownsCd
-              ? IconButton(
-                  padding: EdgeInsets.zero,
-                  alignment: Alignment.centerLeft,
-                  tooltip: 'CD',
-                  iconSize: 18,
-                  color: primary,
-                  icon: const Icon(Icons.album),
-                  onPressed: () => _toggleGridOwnership(index, cd: true),
-                )
-              : null,
-        ),
-        SizedBox(
-          width: 28,
-          height: 28,
-          child: _albumsWithNotes.contains(album.mbid)
-              ? Align(
-                  alignment: Alignment.centerLeft,
-                  child: Icon(Icons.sticky_note_2, size: 18, color: primary),
-                )
-              : null,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Row(mainAxisSize: MainAxisSize.min, children: badges),
+          ),
         ),
         const Spacer(),
         Icon(_ratingTierIcon(ratingTierFor(rating.stars)), size: 18, color: primary),

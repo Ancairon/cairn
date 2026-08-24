@@ -86,21 +86,28 @@ class CairnApp extends StatefulWidget {
   State<CairnApp> createState() => _CairnAppState();
 }
 
-// DynamicColorBuilder only ever reads the system palette once, in its own
-// initState — it has no listener for the palette changing later (verified
-// against its source: no WidgetsBindingObserver, no repeated platform
-// calls). The realistic moment a change would happen is the user leaving
-// this app, changing wallpaper/style in system Settings, and coming back —
-// so we watch for that resume and force DynamicColorBuilder to re-mount
-// (via a fresh Key, since that's the only way to make it re-run initState)
-// rather than trusting it to notice on its own.
+// Calls DynamicColorPlugin directly instead of using DynamicColorBuilder,
+// and holds the result in this State via a plain setState — never a key
+// change. DynamicColorBuilder's own initState always starts with null
+// colors and fills them in a moment later (see its source), so remounting
+// it on every resume — the previous approach, to notice a wallpaper change
+// made while away — produced a visible fallback-color flash on every single
+// app reopen, not just the first. It also tore down and rebuilt the entire
+// widget tree below it (DiscoveryScreen included) on every resume, which
+// broke an in-progress import mid-match and reset the Play button's screen
+// state on every return from a streaming app. Calling the plugin directly
+// and updating in place avoids all of that: no remount, so no flash beyond
+// the one unavoidable cold-launch fetch, and no more forced teardown of
+// live screen state for this reason at all.
 class _CairnAppState extends State<CairnApp> with WidgetsBindingObserver {
-  int _paletteGeneration = 0;
+  ColorScheme? _lightDynamic;
+  ColorScheme? _darkDynamic;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _refreshPalette();
   }
 
   @override
@@ -111,8 +118,39 @@ class _CairnAppState extends State<CairnApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      setState(() => _paletteGeneration++);
+    if (state == AppLifecycleState.resumed) _refreshPalette();
+  }
+
+  // Same two-tier fallback DynamicColorBuilder itself uses: a full core
+  // palette where the OS provides one (Android 12+), else a single accent
+  // color (macOS/Windows/Linux), else leave whatever's already showing
+  // alone — never regress to the static seed color once a real one has
+  // been found.
+  Future<void> _refreshPalette() async {
+    try {
+      final corePalette = await DynamicColorPlugin.getCorePalette();
+      if (!mounted) return;
+      if (corePalette != null) {
+        setState(() {
+          _lightDynamic = corePalette.toColorScheme();
+          _darkDynamic = corePalette.toColorScheme(brightness: Brightness.dark);
+        });
+        return;
+      }
+    } on PlatformException {
+      // Fall through to the accent-color attempt below.
+    }
+    try {
+      final accentColor = await DynamicColorPlugin.getAccentColor();
+      if (!mounted || accentColor == null) return;
+      setState(() {
+        _lightDynamic = ColorScheme.fromSeed(
+            seedColor: accentColor, brightness: Brightness.light);
+        _darkDynamic = ColorScheme.fromSeed(
+            seedColor: accentColor, brightness: Brightness.dark);
+      });
+    } on PlatformException {
+      // Neither source available on this platform — static seed color below.
     }
   }
 
@@ -121,34 +159,29 @@ class _CairnAppState extends State<CairnApp> with WidgetsBindingObserver {
     // On Android 12+ (and Linux/macOS/Windows), this hands us the real
     // system palette (wallpaper-derived Material You colors, including
     // whatever style — Expressive or otherwise — the user picked in their
-    // OS theming settings). lightDynamic/darkDynamic are null wherever the
-    // platform doesn't support it (older Android, web), and only then do we
-    // fall back to our own fixed seed color.
-    return DynamicColorBuilder(
-      key: ValueKey(_paletteGeneration),
-      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-        return MaterialApp(
-          title: 'Cairn',
-          themeMode: ThemeMode.system,
-          theme: ThemeData(
-            colorScheme: lightDynamic ??
-                ColorScheme.fromSeed(
-                  seedColor: Colors.deepPurple,
-                  brightness: Brightness.light,
-                  dynamicSchemeVariant: DynamicSchemeVariant.expressive,
-                ),
-          ),
-          darkTheme: ThemeData(
-            colorScheme: darkDynamic ??
-                ColorScheme.fromSeed(
-                  seedColor: Colors.deepPurple,
-                  brightness: Brightness.dark,
-                  dynamicSchemeVariant: DynamicSchemeVariant.expressive,
-                ),
-          ),
-          home: DiscoveryScreen(controller: widget.controller),
-        );
-      },
+    // OS theming settings). Null wherever the platform doesn't support it
+    // (older Android, web) or before the first fetch resolves, and only
+    // then do we fall back to our own fixed seed color.
+    return MaterialApp(
+      title: 'Cairn',
+      themeMode: ThemeMode.system,
+      theme: ThemeData(
+        colorScheme: _lightDynamic ??
+            ColorScheme.fromSeed(
+              seedColor: Colors.deepPurple,
+              brightness: Brightness.light,
+              dynamicSchemeVariant: DynamicSchemeVariant.expressive,
+            ),
+      ),
+      darkTheme: ThemeData(
+        colorScheme: _darkDynamic ??
+            ColorScheme.fromSeed(
+              seedColor: Colors.deepPurple,
+              brightness: Brightness.dark,
+              dynamicSchemeVariant: DynamicSchemeVariant.expressive,
+            ),
+      ),
+      home: DiscoveryScreen(controller: widget.controller),
     );
   }
 }

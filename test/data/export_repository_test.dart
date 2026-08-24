@@ -9,14 +9,16 @@ import 'package:cairn/data/repositories/rating_repository.dart';
 import 'package:cairn/data/repositories/export_repository.dart';
 
 void main() {
-  test('CSV export escapes commas/quotes, JSON export includes rating fields', () async {
+  test('CSV export escapes commas/quotes, JSON export includes rating fields',
+      () async {
     // In-memory DB pre-populated directly via SQL — getOrFetch() hits the
     // local cache and never reaches the network, so this test makes no live
     // API calls despite constructing real client objects.
     final database = AppDatabase.memory();
     final http = ApiHttpClient();
     final cache = ResponseCache(database);
-    final albums = AlbumRepository(database, MusicBrainzClient(http, cache), CoverArtClient(http, cache));
+    final albums = AlbumRepository(
+        database, MusicBrainzClient(http, cache), CoverArtClient(http, cache));
     final ratings = RatingRepository(database);
     final export = ExportRepository(ratings, albums);
 
@@ -27,11 +29,13 @@ void main() {
     ratings.rate('a1', 5, notes: 'great record');
 
     final csv = await export.toCsv();
-    expect(csv, contains('"A Title, With Comma"'));
+    expect(csv, contains('mbid,title,artist,year,genres,stars,rated_at,notes'));
+    expect(csv, contains('a1,"A Title, With Comma"'));
     expect(csv, contains('"Some ""Artist"""'));
     expect(csv, contains('jazz; fusion'));
 
     final json = await export.toJson();
+    expect(json, contains('"mbid":"a1"'));
     expect(json, contains('"stars":5'));
     expect(json, contains('"great record"'));
     expect(json, contains('"year":1994'));

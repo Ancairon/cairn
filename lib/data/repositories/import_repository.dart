@@ -1,8 +1,12 @@
 import 'dart:convert';
 
+import '../models/saved_filter.dart';
 import 'album_repository.dart';
 import 'backup_repository.dart';
 import 'rating_repository.dart';
+import 'recommendation_repository.dart';
+import 'saved_filter_repository.dart';
+import 'settings_repository.dart';
 
 /// One row parsed from an exported JSON/CSV file, before it's been matched
 /// against a local album. [mbid] is null for rows exported before this
@@ -37,6 +41,30 @@ class ImportRow {
 
 enum ImportRowOutcome { added, overwritten, unmatched }
 
+/// A portable subset of `SettingsRepository` — deliberately excludes
+/// device-specific fields (backup folder path, auto-backup consent,
+/// last-checked timestamps) that would be actively wrong to carry onto a
+/// different device or a fresh install. `null` on `defaultOpenedMenuItem`/
+/// `defaultPlayerApp` is itself meaningful ("None" was selected) and is
+/// applied as-is; `null` on the other three fields means "not set on the
+/// source device" and is left untouched locally, since their setters have
+/// no way to represent "no value" at all.
+class ImportedSettings {
+  final String? defaultOpenedMenuItem;
+  final String? defaultPlayerApp;
+  final String? ratedAlbumsSort;
+  final String? ratedAlbumsView;
+  final String? ratedAlbumsSize;
+
+  ImportedSettings({
+    required this.defaultOpenedMenuItem,
+    required this.defaultPlayerApp,
+    required this.ratedAlbumsSort,
+    required this.ratedAlbumsView,
+    required this.ratedAlbumsSize,
+  });
+}
+
 /// Reported once per row as [ImportRepository.preview] works through a
 /// file — matching an uncached album is a live, rate-limited MusicBrainz
 /// call, so a large file can take a real amount of time and needs visible
@@ -68,10 +96,20 @@ class ImportPreview {
   final List<ImportRow> overwriteRows;
   final List<ImportRow> unmatchedRows;
 
+  /// Null for every field below when the source file predates this data
+  /// (CSV, or the original bare-array JSON format) — those imports only
+  /// ever touch ratings, exactly as before.
+  final List<String>? likedGenres;
+  final List<SavedFilter>? savedFilters;
+  final ImportedSettings? settings;
+
   ImportPreview({
     required this.newRows,
     required this.overwriteRows,
     required this.unmatchedRows,
+    this.likedGenres,
+    this.savedFilters,
+    this.settings,
   });
 
   int get newCount => newRows.length;
@@ -83,8 +121,12 @@ class ImportRepository {
   final RatingRepository ratings;
   final AlbumRepository albums;
   final BackupRepository backups;
+  final RecommendationRepository recommendations;
+  final SavedFilterRepository savedFilters;
+  final SettingsRepository settings;
 
-  ImportRepository(this.ratings, this.albums, this.backups);
+  ImportRepository(this.ratings, this.albums, this.backups,
+      this.recommendations, this.savedFilters, this.settings);
 
   /// Parses [content] and matches each row strictly by `mbid` — never by
   /// title/artist, since there's no way to disambiguate reissues/same-titled
@@ -96,7 +138,8 @@ class ImportRepository {
   /// albums are new to this device can take tens of seconds or more.
   Future<ImportPreview> preview(String content,
       {void Function(ImportProgress progress)? onProgress}) async {
-    final rows = _parse(content);
+    final parsed = _parse(content);
+    final rows = parsed.rows;
     final total = rows.length;
     final newRows = <ImportRow>[];
     final overwriteRows = <ImportRow>[];
@@ -146,14 +189,20 @@ class ImportRepository {
       newRows: newRows,
       overwriteRows: overwriteRows,
       unmatchedRows: unmatchedRows,
+      likedGenres: parsed.likedGenres,
+      savedFilters: parsed.savedFilters,
+      settings: parsed.settings,
     );
   }
 
   /// Snapshots the current database first (a safety copy, not an in-app
   /// restore feature — see BackupRepository.createPreImportSafetySnapshot),
   /// then writes every matched row with imported-always-overwrites
-  /// semantics, preserving each row's original `rated_at`. Returns the
-  /// number of ratings written.
+  /// semantics, preserving each row's original `rated_at`, and applies
+  /// liked genres/saved filters/settings when the source file had them.
+  /// Returns the number of ratings written (genres/filters/settings aren't
+  /// counted — they're either wholly present or wholly absent per file, not
+  /// a per-row outcome).
   Future<int> apply(
       ImportPreview preview, String safetySnapshotFolderPath) async {
     await backups.createPreImportSafetySnapshot(safetySnapshotFolderPath);
@@ -163,16 +212,82 @@ class ImportRepository {
       albums.setOwnership(row.mbid!,
           ownsCd: row.ownsCd, ownsVinyl: row.ownsVinyl);
     }
+    if (preview.likedGenres != null) {
+      recommendations.setLikedGenres(preview.likedGenres!);
+    }
+    if (preview.savedFilters != null) {
+      final existing = savedFilters.all();
+      for (final filter in preview.savedFilters!) {
+        SavedFilter? match;
+        for (final candidate in existing) {
+          if (candidate.name == filter.name) {
+            match = candidate;
+            break;
+          }
+        }
+        if (match != null) {
+          savedFilters.update(match.id!, filter.name, filter.criteria);
+        } else {
+          savedFilters.create(filter.name, filter.criteria);
+        }
+      }
+    }
+    final importedSettings = preview.settings;
+    if (importedSettings != null) {
+      settings.setDefaultOpenedMenuItem(importedSettings.defaultOpenedMenuItem);
+      settings.setDefaultPlayerApp(importedSettings.defaultPlayerApp);
+      if (importedSettings.ratedAlbumsSort != null) {
+        settings.setRatedAlbumsSort(importedSettings.ratedAlbumsSort!);
+      }
+      if (importedSettings.ratedAlbumsView != null) {
+        settings.setRatedAlbumsView(importedSettings.ratedAlbumsView!);
+      }
+      if (importedSettings.ratedAlbumsSize != null) {
+        settings.setRatedAlbumsSize(importedSettings.ratedAlbumsSize!);
+      }
+    }
     return preview.newCount + preview.overwriteCount;
   }
 
-  List<ImportRow> _parse(String content) {
+  /// `{...}` is the current export shape (ratings + liked genres + saved
+  /// filters + settings, see `ExportRepository.toJson`); a bare `[...]` is
+  /// the original ratings-only JSON shape from before this project added
+  /// those other sections; anything else is CSV, which has never carried
+  /// more than ratings. Only the object shape ever populates
+  /// likedGenres/savedFilters/settings on the returned record.
+  ({
+    List<ImportRow> rows,
+    List<String>? likedGenres,
+    List<SavedFilter>? savedFilters,
+    ImportedSettings? settings,
+  }) _parse(String content) {
     final trimmed = content.trimLeft();
-    return trimmed.startsWith('[') ? _parseJson(content) : _parseCsv(content);
+    if (trimmed.startsWith('{')) {
+      final decoded = jsonDecode(content) as Map<String, dynamic>;
+      return (
+        rows: _parseRatingsList(decoded['ratings'] as List? ?? const []),
+        likedGenres: (decoded['liked_genres'] as List?)?.cast<String>(),
+        savedFilters: _parseSavedFilters(decoded['saved_filters'] as List?),
+        settings: _parseSettings(decoded['settings'] as Map<String, dynamic>?),
+      );
+    }
+    if (trimmed.startsWith('[')) {
+      return (
+        rows: _parseRatingsList(jsonDecode(content) as List),
+        likedGenres: null,
+        savedFilters: null,
+        settings: null,
+      );
+    }
+    return (
+      rows: _parseCsv(content),
+      likedGenres: null,
+      savedFilters: null,
+      settings: null,
+    );
   }
 
-  List<ImportRow> _parseJson(String content) {
-    final decoded = jsonDecode(content) as List;
+  List<ImportRow> _parseRatingsList(List decoded) {
     return decoded.map((entry) {
       final row = entry as Map<String, dynamic>;
       return ImportRow(
@@ -186,6 +301,32 @@ class ImportRepository {
         ownsVinyl: row['owns_vinyl'] as bool? ?? false,
       );
     }).toList();
+  }
+
+  List<SavedFilter>? _parseSavedFilters(List? decoded) {
+    if (decoded == null) return null;
+    return decoded.map((entry) {
+      final map = entry as Map<String, dynamic>;
+      return SavedFilter(
+        name: map['name'] as String,
+        criteria: FilterCriteria(
+          ownership: map['ownership'] as String?,
+          minRating: map['min_rating'] as int?,
+          maxRating: map['max_rating'] as int?,
+        ),
+      );
+    }).toList();
+  }
+
+  ImportedSettings? _parseSettings(Map<String, dynamic>? map) {
+    if (map == null) return null;
+    return ImportedSettings(
+      defaultOpenedMenuItem: map['default_opened_menu_item'] as String?,
+      defaultPlayerApp: map['default_player_app'] as String?,
+      ratedAlbumsSort: map['rated_albums_sort'] as String?,
+      ratedAlbumsView: map['rated_albums_view'] as String?,
+      ratedAlbumsSize: map['rated_albums_size'] as String?,
+    );
   }
 
   /// Looks columns up by name rather than a fixed position, since this

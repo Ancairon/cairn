@@ -485,6 +485,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
     final json = await ExportRepository(
       widget.controller.ratings,
       widget.controller.albums,
+      widget.controller.recommendations,
+      widget.controller.savedFilters,
+      widget.controller.settings,
     ).toJson();
     final directory = await getTemporaryDirectory();
     final file = File('${directory.path}/cairn_ratings.json');
@@ -502,6 +505,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
         widget.controller.ratings,
         widget.controller.albums,
         widget.controller.backups,
+        widget.controller.recommendations,
+        widget.controller.savedFilters,
+        widget.controller.settings,
       );
 
   /// Reads the picked file via [PlatformFile.readAsBytes] rather than
@@ -1476,7 +1482,8 @@ class _MenuHomePage extends StatelessWidget {
   final Future<String?> Function() onPickBackupFolder;
   final Future<String?> Function() onPickImportFile;
   final Future<ImportPreview> Function(
-      String content, void Function(ImportProgress progress) onProgress) onPreviewImport;
+          String content, void Function(ImportProgress progress) onProgress)
+      onPreviewImport;
   final Future<int> Function(ImportPreview preview) onApplyImport;
 
   const _MenuHomePage(

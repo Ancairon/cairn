@@ -23,22 +23,36 @@ void main() {
     final export = ExportRepository(ratings, albums);
 
     database.db.execute(
-      'INSERT INTO albums (mbid, title, artist_name, first_release_year, genres) VALUES (?, ?, ?, ?, ?)',
-      ['a1', 'A Title, With Comma', 'Some "Artist"', 1994, '["jazz","fusion"]'],
+      'INSERT INTO albums (mbid, title, artist_name, first_release_year, genres, owns_cd, owns_vinyl) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        'a1',
+        'A Title, With Comma',
+        'Some "Artist"',
+        1994,
+        '["jazz","fusion"]',
+        1,
+        0
+      ],
     );
     ratings.rate('a1', 5, notes: 'great record');
 
     final csv = await export.toCsv();
-    expect(csv, contains('mbid,title,artist,year,genres,stars,rated_at,notes'));
+    expect(
+        csv,
+        contains(
+            'mbid,title,artist,year,genres,stars,rated_at,notes,owns_cd,owns_vinyl'));
     expect(csv, contains('a1,"A Title, With Comma"'));
     expect(csv, contains('"Some ""Artist"""'));
     expect(csv, contains('jazz; fusion'));
+    expect(csv, contains(',true,false'));
 
     final json = await export.toJson();
     expect(json, contains('"mbid":"a1"'));
     expect(json, contains('"stars":5'));
     expect(json, contains('"great record"'));
     expect(json, contains('"year":1994'));
+    expect(json, contains('"owns_cd":true'));
+    expect(json, contains('"owns_vinyl":false'));
 
     http.close();
     database.close();

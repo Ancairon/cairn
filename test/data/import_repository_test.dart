@@ -252,4 +252,99 @@ void main() {
 
     database.close();
   });
+
+  test('apply() restores owns_cd/owns_vinyl onto the local album', () async {
+    final database = AppDatabase.memory();
+    final apiHttp = ApiHttpClient(MockClient((request) async {
+      fail('cached albums should not trigger a network request');
+    }));
+    final cache = ResponseCache(database);
+    final albums = AlbumRepository(database, MusicBrainzClient(apiHttp, cache),
+        CoverArtClient(apiHttp, cache));
+    final ratings = RatingRepository(database);
+    final backups = BackupRepository(database);
+    final import = ImportRepository(ratings, albums, backups);
+
+    database.db.execute(
+      'INSERT INTO albums (mbid, title, artist_name) VALUES (?, ?, ?)',
+      ['a1', 'Album', 'Artist'],
+    );
+
+    final json = '''
+    [{"mbid":"a1","title":"Album","artist":"Artist","year":2020,"genres":[],"stars":5,"rated_at":"2021-06-01T00:00:00.000Z","notes":null,"owns_cd":true,"owns_vinyl":false}]
+    ''';
+
+    final preview = await import.preview(json);
+    expect(preview.newRows.single.ownsCd, isTrue);
+    expect(preview.newRows.single.ownsVinyl, isFalse);
+
+    final directory =
+        await Directory.systemTemp.createTemp('cairn-import-ownership-test-');
+    await import.apply(preview, directory.path);
+    expect(albums.isCachedLocally('a1'), isTrue);
+    final row = database.db.select(
+        'SELECT owns_cd, owns_vinyl FROM albums WHERE mbid = ?', ['a1']).single;
+    expect(row['owns_cd'], 1);
+    expect(row['owns_vinyl'], 0);
+
+    database.close();
+    await directory.delete(recursive: true);
+  });
+
+  test('CSV export/import round-trip preserves ownership', () async {
+    final database = AppDatabase.memory();
+    final apiHttp = ApiHttpClient(MockClient((request) async {
+      fail('cached albums should not trigger a network request');
+    }));
+    final cache = ResponseCache(database);
+    final albums = AlbumRepository(database, MusicBrainzClient(apiHttp, cache),
+        CoverArtClient(apiHttp, cache));
+    final ratings = RatingRepository(database);
+    final backups = BackupRepository(database);
+    final export = ExportRepository(ratings, albums);
+    final import = ImportRepository(ratings, albums, backups);
+
+    database.db.execute(
+      'INSERT INTO albums (mbid, title, artist_name, owns_cd, owns_vinyl) VALUES (?, ?, ?, ?, ?)',
+      ['a1', 'Album', 'Artist', 0, 1],
+    );
+    ratings.rate('a1', 4);
+
+    final csv = await export.toCsv();
+    final preview = await import.preview(csv);
+    expect(preview.overwriteRows.single.ownsCd, isFalse);
+    expect(preview.overwriteRows.single.ownsVinyl, isTrue);
+
+    database.close();
+  });
+
+  test('a CSV file predating ownership columns defaults to not-owned',
+      () async {
+    final database = AppDatabase.memory();
+    final apiHttp = ApiHttpClient(MockClient((request) async {
+      fail('cached albums should not trigger a network request');
+    }));
+    final cache = ResponseCache(database);
+    final albums = AlbumRepository(database, MusicBrainzClient(apiHttp, cache),
+        CoverArtClient(apiHttp, cache));
+    final ratings = RatingRepository(database);
+    final backups = BackupRepository(database);
+    final import = ImportRepository(ratings, albums, backups);
+
+    database.db.execute(
+      'INSERT INTO albums (mbid, title, artist_name) VALUES (?, ?, ?)',
+      ['a1', 'Album', 'Artist'],
+    );
+
+    // The 8-column format from earlier this session — mbid added, but no
+    // ownership columns yet.
+    const oldCsv = 'mbid,title,artist,year,genres,stars,rated_at,notes\n'
+        'a1,Album,Artist,2020,,5,2021-06-01T00:00:00.000Z,\n';
+
+    final preview = await import.preview(oldCsv);
+    expect(preview.newRows.single.ownsCd, isFalse);
+    expect(preview.newRows.single.ownsVinyl, isFalse);
+
+    database.close();
+  });
 }

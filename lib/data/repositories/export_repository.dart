@@ -21,14 +21,16 @@ class ExportRepository {
         'stars': rating.stars,
         'rated_at': rating.ratedAt.toIso8601String(),
         'notes': rating.notes,
+        'owns_cd': album.ownsCd,
+        'owns_vinyl': album.ownsVinyl,
       });
     }
     return jsonEncode(rows);
   }
 
   Future<String> toCsv() async {
-    final buffer =
-        StringBuffer('mbid,title,artist,year,genres,stars,rated_at,notes\n');
+    final buffer = StringBuffer(
+        'mbid,title,artist,year,genres,stars,rated_at,notes,owns_cd,owns_vinyl\n');
     for (final rating in ratings.allRatings()) {
       final album = await albums.getOrFetch(rating.albumMbid);
       buffer.writeln([
@@ -40,6 +42,8 @@ class ExportRepository {
         rating.stars.toString(),
         rating.ratedAt.toIso8601String(),
         _csvField(rating.notes ?? ''),
+        album.ownsCd.toString(),
+        album.ownsVinyl.toString(),
       ].join(','));
     }
     return buffer.toString();

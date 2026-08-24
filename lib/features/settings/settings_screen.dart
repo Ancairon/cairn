@@ -238,7 +238,10 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) Navigator.of(context, rootNavigator: true).pop();
     if (!mounted) return;
 
-    if (preview.newCount == 0 && preview.overwriteCount == 0) {
+    final hasExtras = preview.likedGenres != null ||
+        preview.savedFilters != null ||
+        preview.settings != null;
+    if (preview.newCount == 0 && preview.overwriteCount == 0 && !hasExtras) {
       messenger.showSnackBar(SnackBar(
         content: Text(preview.unmatchedCount == 0
             ? 'That file has no ratings to import.'
@@ -254,7 +257,11 @@ class _SettingsPageState extends State<SettingsPage> {
         title: const Text('Import ratings?'),
         content: Text('${preview.newCount} new rating(s) will be added.\n'
             '${preview.overwriteCount} existing rating(s) will be overwritten.\n'
-            '${preview.unmatchedCount} row(s) could not be matched and will be skipped.\n\n'
+            '${preview.unmatchedCount} row(s) could not be matched and will be skipped.\n'
+            '${preview.likedGenres != null ? 'Liked genres will be replaced (${preview.likedGenres!.length}).\n' : ''}'
+            '${preview.savedFilters != null ? '${preview.savedFilters!.length} saved filter(s) will be added or updated.\n' : ''}'
+            '${preview.settings != null ? 'App preferences (default menu/player app, Rated Albums display) will be updated.\n' : ''}'
+            '\n'
             "A safety copy of your current data is saved to Cairn's app "
             'storage first, in case something goes wrong.'),
         actions: [

@@ -2,10 +2,15 @@ import 'package:test/test.dart';
 import 'package:cairn/core/db/app_database.dart';
 import 'package:cairn/core/network/http_client.dart';
 import 'package:cairn/core/network/response_cache.dart';
+import 'package:cairn/data/models/saved_filter.dart';
 import 'package:cairn/data/remote/musicbrainz_client.dart';
 import 'package:cairn/data/remote/coverart_client.dart';
+import 'package:cairn/data/remote/listenbrainz_client.dart';
 import 'package:cairn/data/repositories/album_repository.dart';
 import 'package:cairn/data/repositories/rating_repository.dart';
+import 'package:cairn/data/repositories/recommendation_repository.dart';
+import 'package:cairn/data/repositories/saved_filter_repository.dart';
+import 'package:cairn/data/repositories/settings_repository.dart';
 import 'package:cairn/data/repositories/export_repository.dart';
 
 void main() {
@@ -20,7 +25,16 @@ void main() {
     final albums = AlbumRepository(
         database, MusicBrainzClient(http, cache), CoverArtClient(http, cache));
     final ratings = RatingRepository(database);
-    final export = ExportRepository(ratings, albums);
+    final recommendations = RecommendationRepository(
+        database,
+        MusicBrainzClient(http, cache),
+        ListenBrainzClient(http, cache),
+        albums,
+        ratings);
+    final savedFilters = SavedFilterRepository(database);
+    final settings = SettingsRepository(database);
+    final export = ExportRepository(
+        ratings, albums, recommendations, savedFilters, settings);
 
     database.db.execute(
       'INSERT INTO albums (mbid, title, artist_name, first_release_year, genres, owns_cd, owns_vinyl) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -35,6 +49,9 @@ void main() {
       ],
     );
     ratings.rate('a1', 5, notes: 'great record');
+    recommendations.setLikedGenres(['jazz', 'rock']);
+    savedFilters.create('Vinyl only', const FilterCriteria(ownership: 'vinyl'));
+    settings.setDefaultPlayerApp('youtube-music');
 
     final csv = await export.toCsv();
     expect(
@@ -53,6 +70,10 @@ void main() {
     expect(json, contains('"year":1994'));
     expect(json, contains('"owns_cd":true'));
     expect(json, contains('"owns_vinyl":false'));
+    expect(json, contains('"liked_genres":["jazz","rock"]'));
+    expect(json, contains('"name":"Vinyl only"'));
+    expect(json, contains('"ownership":"vinyl"'));
+    expect(json, contains('"default_player_app":"youtube-music"'));
 
     http.close();
     database.close();

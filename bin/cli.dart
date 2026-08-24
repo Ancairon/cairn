@@ -14,6 +14,8 @@ import 'package:cairn/data/repositories/rating_repository.dart';
 import 'package:cairn/data/repositories/recommendation_repository.dart';
 import 'package:cairn/data/repositories/deep_link_repository.dart';
 import 'package:cairn/data/repositories/export_repository.dart';
+import 'package:cairn/data/repositories/saved_filter_repository.dart';
+import 'package:cairn/data/repositories/settings_repository.dart';
 import 'package:cairn/data/models/album.dart';
 import 'package:cairn/data/genre_pool.dart';
 
@@ -30,16 +32,22 @@ Future<void> main(List<String> args) async {
 
   final albums = AlbumRepository(database, musicBrainz, coverArt);
   final ratings = RatingRepository(database);
-  final recommendations = RecommendationRepository(database, musicBrainz, listenBrainz, albums, ratings);
+  final recommendations = RecommendationRepository(
+      database, musicBrainz, listenBrainz, albums, ratings);
   final deepLinks = DeepLinkRepository(database, musicBrainz, odesli);
-  final export = ExportRepository(ratings, albums);
+  final savedFilters = SavedFilterRepository(database);
+  final settings = SettingsRepository(database);
+  final export = ExportRepository(
+      ratings, albums, recommendations, savedFilters, settings);
 
   final command = args.isNotEmpty ? args.first : 'next';
 
   switch (command) {
     case 'next':
-      if (recommendations.likedGenres().isEmpty && ratings.allRatings().isEmpty) {
-        print("First time here — run 'dart run bin/cli.dart onboard' to pick genres you like.\n"
+      if (recommendations.likedGenres().isEmpty &&
+          ratings.allRatings().isEmpty) {
+        print(
+            "First time here — run 'dart run bin/cli.dart onboard' to pick genres you like.\n"
             'Picking a recommendation from generic defaults for now:\n');
       }
       final album = await recommendations.next();
@@ -68,7 +76,8 @@ Future<void> main(List<String> args) async {
       for (final rating in ratings.allRatings()) {
         final album = await albums.getOrFetch(rating.albumMbid);
         final stars = '${'*' * rating.stars}${'.' * (5 - rating.stars)}';
-        print('$stars  ${album.title} — ${album.artistName}  (rated ${rating.ratedAt.toLocal()})');
+        print(
+            '$stars  ${album.title} — ${album.artistName}  (rated ${rating.ratedAt.toLocal()})');
       }
       break;
 
@@ -81,7 +90,8 @@ Future<void> main(List<String> args) async {
       break;
 
     case 'onboard':
-      print('Pick the genres you like (comma-separated numbers, e.g. 1,5,12):\n');
+      print(
+          'Pick the genres you like (comma-separated numbers, e.g. 1,5,12):\n');
       for (var i = 0; i < genrePool.length; i++) {
         print('  ${i + 1}. ${genrePool[i]}');
       }
@@ -100,7 +110,8 @@ Future<void> main(List<String> args) async {
         break;
       }
       recommendations.setLikedGenres(picks);
-      print('\nSaved. Cold-start recommendations will now draw from: ${picks.join(', ')}');
+      print(
+          '\nSaved. Cold-start recommendations will now draw from: ${picks.join(', ')}');
       break;
 
     case 'search':
@@ -121,7 +132,8 @@ Future<void> main(List<String> args) async {
             .cast<Map<String, dynamic>>()
             .map((c) => c['name'] as String)
             .join(', ');
-        final year = (r['first-release-date'] as String?)?.split('-').first ?? 'unknown year';
+        final year = (r['first-release-date'] as String?)?.split('-').first ??
+            'unknown year';
         print('  ${i + 1}. ${r['title']} — $artist ($year)');
       }
       stdout.write('\nStart from which one? (number, or Enter to cancel) > ');
@@ -130,7 +142,8 @@ Future<void> main(List<String> args) async {
         print('Cancelled.');
         break;
       }
-      final picked = await albums.getOrFetch(results[choice - 1]['id'] as String);
+      final picked =
+          await albums.getOrFetch(results[choice - 1]['id'] as String);
       print('\nStarting from "${picked.title}" by ${picked.artistName}.\n');
       final started = await recommendations.restartFrom(picked);
       print('Next up:');
@@ -151,7 +164,8 @@ Future<void> main(List<String> args) async {
 }
 
 void _printAlbum(Album album) {
-  print('${album.title} — ${album.artistName} (${album.firstReleaseYear ?? 'unknown year'})');
+  print(
+      '${album.title} — ${album.artistName} (${album.firstReleaseYear ?? 'unknown year'})');
   print('  mbid: ${album.mbid}');
   print('  genres: ${album.genres.join(', ')}');
   if (album.coverArtUrl != null) print('  cover art: ${album.coverArtUrl}');
@@ -160,7 +174,8 @@ void _printAlbum(Album album) {
 Future<void> _printPlayLinks(Album album, DeepLinkRepository deepLinks) async {
   final links = await deepLinks.playLinksFor(album);
   if (links.isEmpty) {
-    print('  play: ${deepLinks.searchFallbackUrl(album)} (no direct link found)');
+    print(
+        '  play: ${deepLinks.searchFallbackUrl(album)} (no direct link found)');
     return;
   }
   print('  play:');

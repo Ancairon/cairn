@@ -1664,6 +1664,7 @@ class _GenrePickerPage extends StatefulWidget {
 
 class _GenrePickerPageState extends State<_GenrePickerPage> {
   late final Set<String> _selected = widget.controller.likedGenres().toSet();
+  bool _finishing = false;
 
   // Applies immediately — there's no separate Save step. Leaving the page
   // (back button, or the standard right-swipe) just keeps whatever's
@@ -1671,6 +1672,18 @@ class _GenrePickerPageState extends State<_GenrePickerPage> {
   void _toggle(String genre, bool isSelected) {
     setState(() => isSelected ? _selected.add(genre) : _selected.remove(genre));
     widget.controller.setLikedGenres(_selected.toList());
+  }
+
+  // onDone awaits a network call to seed the first recommendation (cold
+  // MusicBrainz/ListenBrainz caches on a fresh install can take several
+  // real seconds) — without visible feedback here, the button looks
+  // completely unresponsive for that whole stretch. This page is popped by
+  // onDone itself on success, hence the `mounted` guard rather than always
+  // resetting `_finishing` after the await.
+  Future<void> _handleDone() async {
+    setState(() => _finishing = true);
+    await widget.onDone!();
+    if (mounted) setState(() => _finishing = false);
   }
 
   @override
@@ -1696,8 +1709,17 @@ class _GenrePickerPageState extends State<_GenrePickerPage> {
                         Align(
                           alignment: Alignment.centerRight,
                           child: FilledButton(
-                            onPressed: _selected.isEmpty ? null : widget.onDone,
-                            child: const Text('Done'),
+                            onPressed: _selected.isEmpty || _finishing
+                                ? null
+                                : _handleDone,
+                            child: _finishing
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Text('Done'),
                           ),
                         ),
                     ],

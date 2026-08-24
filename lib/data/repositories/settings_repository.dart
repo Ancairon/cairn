@@ -142,6 +142,24 @@ class SettingsRepository {
     );
   }
 
+  DateTime? lastImportAt() {
+    final rows =
+        database.db.select('SELECT last_import_at FROM app_state WHERE id = 0');
+    if (rows.isEmpty) return null;
+    final timestamp = rows.first['last_import_at'] as int?;
+    return timestamp == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(timestamp, isUtc: true);
+  }
+
+  void setLastImportAt(DateTime value) {
+    database.db.execute(
+      'INSERT INTO app_state (id, last_import_at) VALUES (0, ?) '
+      'ON CONFLICT(id) DO UPDATE SET last_import_at = excluded.last_import_at',
+      [value.toUtc().millisecondsSinceEpoch],
+    );
+  }
+
   String? _appStateString(String column) {
     final rows =
         database.db.select('SELECT $column FROM app_state WHERE id = 0');

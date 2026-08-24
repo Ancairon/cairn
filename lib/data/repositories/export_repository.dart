@@ -13,6 +13,7 @@ class ExportRepository {
     for (final rating in ratings.allRatings()) {
       final album = await albums.getOrFetch(rating.albumMbid);
       rows.add({
+        'mbid': album.mbid,
         'title': album.title,
         'artist': album.artistName,
         'year': album.firstReleaseYear,
@@ -26,10 +27,12 @@ class ExportRepository {
   }
 
   Future<String> toCsv() async {
-    final buffer = StringBuffer('title,artist,year,genres,stars,rated_at,notes\n');
+    final buffer =
+        StringBuffer('mbid,title,artist,year,genres,stars,rated_at,notes\n');
     for (final rating in ratings.allRatings()) {
       final album = await albums.getOrFetch(rating.albumMbid);
       buffer.writeln([
+        _csvField(album.mbid),
         _csvField(album.title),
         _csvField(album.artistName),
         album.firstReleaseYear?.toString() ?? '',

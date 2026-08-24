@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../data/repositories/backup_repository.dart';
+import '../../data/repositories/import_repository.dart';
 import '../../data/repositories/update_check_repository.dart';
 
 /// Display label -> stored value for the default-player-app setting. The
@@ -11,6 +12,30 @@ const _playerAppOptions = {
   'Spotify': playerAppSpotify,
   'YouTube Music': playerAppYoutubeMusic,
 };
+
+/// Consistent short form for every timestamp shown in Settings (last backup,
+/// last import, last update check) — no `intl` dependency, matching this
+/// project's plain-dependencies preference.
+String _formatTimestamp(DateTime utc) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final local = utc.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${months[local.month - 1]} ${local.day}, ${local.year} · $hour:$minute';
+}
 
 /// The app's settings page: which menu item (if any) should already be open
 /// when the background menu is revealed, and which player app (if any) Play
@@ -24,6 +49,11 @@ class SettingsPage extends StatefulWidget {
   final VoidCallback onClearAlbumCache;
   final Future<void> Function() onBackup;
   final Future<String?> Function() onPickBackupFolder;
+  final Future<String?> Function() onPickImportFile;
+  final Future<ImportPreview> Function(
+          String content, void Function(ImportProgress progress) onProgress)
+      onPreviewImport;
+  final Future<int> Function(ImportPreview preview) onApplyImport;
   final Future<(bool succeeded, String? newerVersion)> Function()
       onCheckForUpdate;
   final Future<int> Function() onRefreshRatedAlbumsMetadata;
@@ -36,6 +66,9 @@ class SettingsPage extends StatefulWidget {
       required this.onClearAlbumCache,
       required this.onBackup,
       required this.onPickBackupFolder,
+      required this.onPickImportFile,
+      required this.onPreviewImport,
+      required this.onApplyImport,
       required this.onCheckForUpdate,
       required this.onRefreshRatedAlbumsMetadata});
 
@@ -129,18 +162,143 @@ class _SettingsPageState extends State<SettingsPage> {
     widget.settings.setAutoBackupsEnabled(true);
   }
 
+  /// Picks a file, previews the match against local albums, and only writes
+  /// anything once the user confirms the counts shown in the dialog below.
+  /// Matching an album not already cached locally means a live MusicBrainz
+  /// lookup per row, throttled to 1/second — for a large file on a device
+  /// that hasn't seen most of these albums before, that's a real wait, so a
+  /// modal progress dialog (bar + current row) tracks it.
+  Future<void> _importRatings() async {
+    final String? content;
+    try {
+      content = await widget.onPickImportFile();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:
+              Text("Couldn't read that file — is it a Cairn ratings export?")));
+      return;
+    }
+    if (!mounted || content == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final progress = ValueNotifier<ImportProgress?>(null);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('Matching ratings…'),
+          content: ValueListenableBuilder<ImportProgress?>(
+            valueListenable: progress,
+            builder: (context, current, _) {
+              final total = current?.total ?? 0;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  LinearProgressIndicator(
+                    value: total == 0 ? null : current!.current / total,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(current == null
+                      ? 'Starting…'
+                      : '${current.current} / $total'),
+                  if (current != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '${current.row.artist} – ${current.row.title}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    void handleProgress(ImportProgress p) => progress.value = p;
+
+    final ImportPreview preview;
+    try {
+      preview = await widget.onPreviewImport(content, handleProgress);
+    } catch (_) {
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+      if (!mounted) return;
+      messenger.showSnackBar(const SnackBar(
+          content:
+              Text("Couldn't read that file — is it a Cairn ratings export?")));
+      return;
+    }
+    if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    if (!mounted) return;
+
+    if (preview.newCount == 0 && preview.overwriteCount == 0) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(preview.unmatchedCount == 0
+            ? 'That file has no ratings to import.'
+            : 'None of the ${preview.unmatchedCount} row(s) in that file '
+                'could be matched to an album.'),
+      ));
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Import ratings?'),
+        content: Text('${preview.newCount} new rating(s) will be added.\n'
+            '${preview.overwriteCount} existing rating(s) will be overwritten.\n'
+            '${preview.unmatchedCount} row(s) could not be matched and will be skipped.\n\n'
+            "A safety copy of your current data is saved to Cairn's app "
+            'storage first, in case something goes wrong.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Import')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final int written;
+    try {
+      written = await widget.onApplyImport(preview);
+    } catch (_) {
+      if (!mounted) return;
+      messenger.showSnackBar(const SnackBar(
+          content: Text(
+              'Import failed partway through — check Rated Albums for what made it in.')));
+      return;
+    }
+    if (!mounted) return;
+    setState(() {});
+    messenger.showSnackBar(SnackBar(
+      content: Text('Imported $written rating${written == 1 ? '' : 's'}.'),
+    ));
+  }
+
   Future<void> _checkForUpdate() async {
     final (succeeded, newerVersion) = await widget.onCheckForUpdate();
     if (!mounted) return;
+    setState(() {});
     final messenger = ScaffoldMessenger.of(context);
     if (!succeeded) {
       messenger.showSnackBar(const SnackBar(
           content: Text("Couldn't check for updates. Try again later.")));
     } else if (newerVersion != null) {
       messenger.showSnackBar(SnackBar(
-        content: Text(
-            'Update available: v$newerVersion. Download the APK from the '
-            'Releases page and install it manually.'),
+        content:
+            Text('Update available: v$newerVersion. Download the APK from the '
+                'Releases page and install it manually.'),
         duration: const Duration(seconds: 8),
         action: SnackBarAction(
           label: 'Open Releases',
@@ -159,8 +317,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _refreshRatedAlbumsMetadata() async {
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(const SnackBar(
-      content: Text(
-          "Refreshing rated albums' metadata — this can take a while..."),
+      content:
+          Text("Refreshing rated albums' metadata — this can take a while..."),
       duration: Duration(seconds: 4),
     ));
     final count = await widget.onRefreshRatedAlbumsMetadata();
@@ -196,6 +354,9 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final lastBackupAt = widget.settings.lastBackupAt();
+    final lastImportAt = widget.settings.lastImportAt();
+    final lastUpdateCheckAt = widget.settings.lastUpdateCheckAt();
     return Material(
       color: Theme.of(context).colorScheme.surface,
       child: SafeArea(
@@ -209,7 +370,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Text('Settings', style: textTheme.titleLarge),
                 ),
               ),
-              const SizedBox(height: 8),
+              const _SectionHeader('Behavior'),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Text('Default opened menu item on slide',
@@ -256,17 +417,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   selected: _selectedPlayerApp == entry.value,
                   onTap: () => _selectPlayerApp(entry.value),
                 ),
-              const SizedBox(height: 8),
+              const _SectionHeader('Discovery'),
               _OptionTile(
                 label: 'Reset skip penalties',
                 selected: false,
                 onTap: _resetSkipPenalties,
               ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Text('Data', style: textTheme.titleMedium),
-              ),
+              const _SectionHeader('Data'),
               _OptionTile(
                 label: 'Clear artwork cache',
                 selected: false,
@@ -298,16 +455,31 @@ class _SettingsPageState extends State<SettingsPage> {
                   action: _refreshRatedAlbumsMetadata,
                 ),
               ),
+              const _SectionHeader('Backup & Restore'),
               _OptionTile(
                 label: 'Backup ratings',
+                subtitle: 'Share a JSON/CSV export of every rating',
                 selected: false,
                 onTap: widget.onBackup,
               ),
+              _OptionTile(
+                label: 'Import ratings',
+                subtitle: lastImportAt == null
+                    ? 'Restore ratings from a previously exported file'
+                    : 'Last import: ${_formatTimestamp(lastImportAt)}',
+                selected: false,
+                onTap: _importRatings,
+              ),
               SwitchListTile(
                 title: const Text('Automatic weekly backups'),
-                subtitle: Text(_backupFolder == null
-                    ? 'Choose a backup folder first'
-                    : 'Overwrites ${BackupRepository.fileName} when due'),
+                subtitle: Text([
+                  _backupFolder == null
+                      ? 'Choose a backup folder first'
+                      : 'Overwrites ${BackupRepository.fileName} when due',
+                  if (lastBackupAt != null)
+                    'Last backup: ${_formatTimestamp(lastBackupAt)}',
+                ].join('\n')),
+                isThreeLine: lastBackupAt != null,
                 value: _autoBackupsEnabled,
                 onChanged: _setAutoBackups,
               ),
@@ -318,19 +490,44 @@ class _SettingsPageState extends State<SettingsPage> {
                 selected: false,
                 onTap: _setBackupFolder,
               ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Text('About', style: textTheme.titleMedium),
-              ),
+              const _SectionHeader('About'),
               _OptionTile(
                 label: 'Check for updates',
+                subtitle: lastUpdateCheckAt == null
+                    ? null
+                    : 'Last checked: ${_formatTimestamp(lastUpdateCheckAt)}',
                 selected: false,
                 onTap: _checkForUpdate,
               ),
+              const SizedBox(height: 16),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// A bold, uppercase divider between groups of related settings — distinct
+/// from the plain `titleMedium` labels used for a single control's own
+/// heading (e.g. "Default player app") within a section.
+class _SectionHeader extends StatelessWidget {
+  final String title;
+
+  const _SectionHeader(this.title);
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 4),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: colors.primary,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
       ),
     );
   }
@@ -341,16 +538,21 @@ class _SettingsPageState extends State<SettingsPage> {
 /// more options later is just another entry in `_openableMenuItems`.
 class _OptionTile extends StatelessWidget {
   final String label;
+  final String? subtitle;
   final bool selected;
   final VoidCallback onTap;
 
   const _OptionTile(
-      {required this.label, required this.selected, required this.onTap});
+      {required this.label,
+      this.subtitle,
+      required this.selected,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
       title: Text(label),
+      subtitle: subtitle == null ? null : Text(subtitle!),
       trailing: selected
           ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
           : null,

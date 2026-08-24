@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../core/network/artwork_cache.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -16,6 +18,7 @@ import '../../data/models/album_details.dart';
 import '../../data/models/rating.dart';
 import '../../data/remote/coverart_client.dart';
 import '../../data/repositories/export_repository.dart';
+import '../../data/repositories/import_repository.dart';
 import '../../data/repositories/update_check_repository.dart';
 import '../rated_albums/rated_albums_screen.dart';
 import '../settings/settings_screen.dart';
@@ -193,8 +196,10 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
           onClearAlbumCache: _clearAlbumCache,
           onBackup: _backupRatings,
           onPickBackupFolder: _pickBackupFolder,
-          onCheckForUpdate: () =>
-              widget.controller.checkForUpdate(force: true),
+          onPickImportFile: _pickImportFile,
+          onPreviewImport: _previewImport,
+          onApplyImport: _applyImport,
+          onCheckForUpdate: () => widget.controller.checkForUpdate(force: true),
           onRefreshRatedAlbumsMetadata:
               widget.controller.refreshRatedAlbumsMetadata),
       _ => null,
@@ -484,22 +489,47 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
     final directory = await getTemporaryDirectory();
     final file = File('${directory.path}/cairn_ratings.json');
     await file.writeAsString(json);
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/json')],
+    await SharePlus.instance.share(ShareParams(
+      files: [XFile(file.path, mimeType: 'application/json')],
       text: 'Cairn ratings backup',
-    );
+    ));
   }
 
-  // TEMPORARY STUB: file_picker is disabled project-wide right now because
-  // its Android module is incompatible with this project's AGP 9.0.1/Kotlin
-  // 2.3.20 toolchain (file_picker 8.1.7 hardcodes compileSdk 34 against a
-  // transitive dependency that now requires 36+; 11.0.3's Kotlin source
-  // isn't even compiled by this toolchain; 12.0.0-beta.7 conflicts with
-  // share_plus's win32 constraint) — see pubspec.yaml. Revert to
-  // `FilePicker.platform.getDirectoryPath(dialogTitle: 'Choose Cairn backup
-  // folder')` (and restore the `file_picker` dependency + the import at the
-  // top of this file) once that's resolved.
-  Future<String?> _pickBackupFolder() async => null;
+  Future<String?> _pickBackupFolder() =>
+      FilePicker.getDirectoryPath(dialogTitle: 'Choose Cairn backup folder');
+
+  ImportRepository get _importRepository => ImportRepository(
+        widget.controller.ratings,
+        widget.controller.albums,
+        widget.controller.backups,
+      );
+
+  /// Reads the picked file via [PlatformFile.readAsBytes] rather than
+  /// `.path` — Android's Storage Access Framework can hand back a
+  /// `content://` URI with no direct filesystem path. Deliberately separate
+  /// from matching (`_previewImport`) — picking is fast, matching can be a
+  /// genuinely long, rate-limited operation, and Settings needs the seam
+  /// between them to show a warning before the slow part starts.
+  Future<String?> _pickImportFile() async {
+    final file = await FilePicker.pickFile(
+      dialogTitle: 'Choose a Cairn ratings export to import',
+      type: FileType.custom,
+      allowedExtensions: ['json', 'csv'],
+    );
+    if (file == null) return null;
+    return utf8.decode(await file.readAsBytes());
+  }
+
+  Future<ImportPreview> _previewImport(
+          String content, void Function(ImportProgress progress) onProgress) =>
+      _importRepository.preview(content, onProgress: onProgress);
+
+  Future<int> _applyImport(ImportPreview preview) async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final written = await _importRepository.apply(preview, docsDir.path);
+    widget.controller.settings.setLastImportAt(DateTime.now());
+    return written;
+  }
 
   Future<void> _runAutomaticBackup() async {
     final settings = widget.controller.settings;
@@ -697,6 +727,9 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
                         onClearAlbumCache: _clearAlbumCache,
                         onBackup: _backupRatings,
                         onPickBackupFolder: _pickBackupFolder,
+                        onPickImportFile: _pickImportFile,
+                        onPreviewImport: _previewImport,
+                        onApplyImport: _applyImport,
                       ),
                     ),
                   ),
@@ -949,8 +982,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
                                   ),
                                 ),
                               ),
-                              title: Text(
-                                  Album.stripOuterBrackets(r['title'] as String)),
+                              title: Text(Album.stripOuterBrackets(
+                                  r['title'] as String)),
                               subtitle: RichText(
                                 text: TextSpan(
                                   style: Theme.of(context).textTheme.bodyMedium,
@@ -1441,6 +1474,10 @@ class _MenuHomePage extends StatelessWidget {
   final VoidCallback onClearAlbumCache;
   final Future<void> Function() onBackup;
   final Future<String?> Function() onPickBackupFolder;
+  final Future<String?> Function() onPickImportFile;
+  final Future<ImportPreview> Function(
+      String content, void Function(ImportProgress progress) onProgress) onPreviewImport;
+  final Future<int> Function(ImportPreview preview) onApplyImport;
 
   const _MenuHomePage(
       {required this.controller,
@@ -1448,7 +1485,10 @@ class _MenuHomePage extends StatelessWidget {
       required this.onClearArtworkCache,
       required this.onClearAlbumCache,
       required this.onBackup,
-      required this.onPickBackupFolder});
+      required this.onPickBackupFolder,
+      required this.onPickImportFile,
+      required this.onPreviewImport,
+      required this.onApplyImport});
 
   @override
   Widget build(BuildContext context) {
@@ -1502,6 +1542,9 @@ class _MenuHomePage extends StatelessWidget {
                             onClearAlbumCache: onClearAlbumCache,
                             onBackup: onBackup,
                             onPickBackupFolder: onPickBackupFolder,
+                            onPickImportFile: onPickImportFile,
+                            onPreviewImport: onPreviewImport,
+                            onApplyImport: onApplyImport,
                             onCheckForUpdate: () =>
                                 controller.checkForUpdate(force: true),
                             onRefreshRatedAlbumsMetadata:

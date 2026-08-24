@@ -146,6 +146,7 @@ const _additiveColumns = {
     'backup_folder_path TEXT',
     'last_backup_at INTEGER',
     'last_update_check_at INTEGER',
+    'last_import_at INTEGER',
     'recent_recommended_artist_mbids TEXT',
   ],
 };

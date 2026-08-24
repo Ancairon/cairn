@@ -10,12 +10,24 @@ class RatingRepository extends ChangeNotifier {
 
   RatingRepository(this.database);
 
-  void rate(String albumMbid, int stars, {String? notes}) {
+  /// [ratedAt] defaults to now; import passes the original export timestamp
+  /// through so a restored rating keeps its place in the Rated Albums order.
+  /// [notes] left null means "caller isn't touching notes" and preserves
+  /// whatever's already stored (e.g. a note import just restored) — the
+  /// ordinary tier-rating flow never passes notes at all. Import still
+  /// overwrites notes explicitly when its own source row has a value.
+  void rate(String albumMbid, int stars, {String? notes, DateTime? ratedAt}) {
     database.db.execute(
       'INSERT INTO ratings (album_mbid, stars, rated_at, notes) VALUES (?, ?, ?, ?) '
       'ON CONFLICT(album_mbid) DO UPDATE SET '
-      'stars = excluded.stars, rated_at = excluded.rated_at, notes = excluded.notes',
-      [albumMbid, stars, DateTime.now().millisecondsSinceEpoch, notes],
+      'stars = excluded.stars, rated_at = excluded.rated_at, '
+      'notes = COALESCE(excluded.notes, ratings.notes)',
+      [
+        albumMbid,
+        stars,
+        (ratedAt ?? DateTime.now()).millisecondsSinceEpoch,
+        notes
+      ],
     );
     notifyListeners();
   }
@@ -35,8 +47,9 @@ class RatingRepository extends ChangeNotifier {
         .map((row) => Rating(
               albumMbid: row['album_mbid'] as String,
               stars: row['stars'] as int,
-              ratedAt:
-                  DateTime.fromMillisecondsSinceEpoch(row['rated_at'] as int),
+              ratedAt: DateTime.fromMillisecondsSinceEpoch(
+                  row['rated_at'] as int,
+                  isUtc: true),
               notes: row['notes'] as String?,
             ))
         .toList();
@@ -52,7 +65,8 @@ class RatingRepository extends ChangeNotifier {
     return Rating(
       albumMbid: row['album_mbid'] as String,
       stars: row['stars'] as int,
-      ratedAt: DateTime.fromMillisecondsSinceEpoch(row['rated_at'] as int),
+      ratedAt: DateTime.fromMillisecondsSinceEpoch(row['rated_at'] as int,
+          isUtc: true),
       notes: row['notes'] as String?,
     );
   }
@@ -90,7 +104,8 @@ class RatingRepository extends ChangeNotifier {
       final rating = Rating(
         albumMbid: album.mbid,
         stars: row['stars'] as int,
-        ratedAt: DateTime.fromMillisecondsSinceEpoch(row['rated_at'] as int),
+        ratedAt: DateTime.fromMillisecondsSinceEpoch(row['rated_at'] as int,
+            isUtc: true),
         notes: row['notes'] as String?,
       );
       return (album, rating);

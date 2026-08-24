@@ -3,7 +3,7 @@ description: >
   Album-first music discovery — local-first, no login, no API keys.
   Terminal app first (Milestone 1); Flutter mobile UI comes later on the same data layer.
 publish_to: 'none'
-version: 0.1.2+88
+version: 0.1.11+97
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -20,15 +20,12 @@ dependencies:
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.2
   path: ^1.9.1
-  share_plus: ^10.1.4
-  # file_picker: ^8.1.7
-  # TEMPORARILY disabled: file_picker's Android module is incompatible with
-  # this project's AGP 9.0.1/Kotlin 2.3.20 toolchain — 8.1.7 hardcodes
-  # compileSdk 34 against a transitive dependency requiring 36+, 11.0.3's
-  # Kotlin source isn't compiled by this toolchain at all, and 12.0.0-beta.7
-  # conflicts with share_plus's win32 constraint. The one caller
-  # (_pickBackupFolder in lib/features/discovery/discovery_screen.dart) is
-  # stubbed to return null until this is resolved. Restore both together.
+  # share_plus 13.3.0 is required alongside file_picker 12.0.0: file_picker's
+  # AGP 9.0+/Kotlin 2.3 incompatibility (present through 11.0.3) was fixed in
+  # its 12.x line, but 12.x's win32 constraint conflicts with share_plus
+  # 10.1.4's — see SOW-0006 for the full history.
+  share_plus: ^13.3.0
+  file_picker: ^12.0.0
 
 dev_dependencies:
   flutter_test:

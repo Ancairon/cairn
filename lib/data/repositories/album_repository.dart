@@ -136,6 +136,11 @@ class AlbumRepository {
     return _fetchAndStoreAlbum(releaseGroupMbid);
   }
 
+  /// Whether [mbid] is already cached locally, without triggering a fetch —
+  /// used by import to report a cache-hit/live-fetch distinction without
+  /// callers needing to know this repository's own schema.
+  bool isCachedLocally(String mbid) => _readLocal(mbid) != null;
+
   /// Re-fetches [releaseGroupMbid]'s metadata from MusicBrainz/Cover Art
   /// Archive and overwrites the local row, even if one already exists —
   /// unlike [getOrFetch], which trusts any existing row and never re-fetches

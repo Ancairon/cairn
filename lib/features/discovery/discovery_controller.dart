@@ -97,25 +97,22 @@ class DiscoveryController extends ChangeNotifier {
     return refreshed;
   }
 
-  /// Checks GitHub Releases for a newer version. Always a no-op in debug
-  /// builds, regardless of [force] — see the in-method comment. Without
-  /// [force], this is a no-op (returns `(true, null)` without touching the network) unless at
-  /// least 7 days have passed since the last check — the same
-  /// "opportunistic, on launch/resume, gated by a stored timestamp" pattern
-  /// already used for weekly database backups, rather than adding this
-  /// app's first-ever true background-scheduling mechanism just for this.
-  /// [force] (the Settings button, and tapping the version number) always
-  /// hits the network regardless of timing. Returns `(succeeded, newerVersion)`
-  /// — `newerVersion` is null both when the check didn't run and when it ran
-  /// but found nothing newer, so callers distinguish those via `succeeded`.
+  /// Checks GitHub Releases for a newer version — debug and release builds
+  /// alike, since both share the same `appVersion`/`pubspec.yaml` number
+  /// (an earlier debug-only skip assumed a separate fast-moving internal
+  /// scheme that never actually existed as a distinct numbering track).
+  /// Without [force], this is a no-op (returns `(true, null)` without
+  /// touching the network) unless at least 7 days have passed since the
+  /// last check — the same "opportunistic, on launch/resume, gated by a
+  /// stored timestamp" pattern already used for weekly database backups,
+  /// rather than adding this app's first-ever true background-scheduling
+  /// mechanism just for this. [force] (the Settings button, and tapping the
+  /// version number) always hits the network regardless of timing. Returns
+  /// `(succeeded, newerVersion)` — `newerVersion` is null both when the
+  /// check didn't run and when it ran but found nothing newer, so callers
+  /// distinguish those via `succeeded`.
   Future<(bool succeeded, String? newerVersion)> checkForUpdate(
       {bool force = false}) async {
-    // Debug builds aren't the audience for "go download the public
-    // release from GitHub" — skip entirely, rather than compare a
-    // fast-moving internal alpha version against the public release track
-    // and risk a nonsensical result (they're two different numbering
-    // schemes since SOW-0014's release-versioning split).
-    if (kDebugMode) return (true, null);
     if (!force) {
       final last = settings.lastUpdateCheckAt();
       if (last != null && DateTime.now().difference(last).inDays < 7) {
